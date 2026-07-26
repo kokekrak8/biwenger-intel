@@ -164,6 +164,13 @@
     border-top:1px solid var(--line); font-size:11.5px; color:var(--muted)}
   .mkt .meta2 b{color:var(--text); font-family:var(--mono); font-weight:500}
   .mkt .meta2 .up{color:var(--signal)} .mkt .meta2 .down{color:var(--danger)} .mkt .meta2 .warn{color:var(--danger)}
+  .mnews-wrap{margin-top:10px}
+  .mnews{display:block; font-size:11.5px; line-height:1.4; color:var(--muted); text-decoration:none;
+    background:var(--surface2); border:1px solid var(--line); border-left:3px solid var(--muted);
+    border-radius:8px; padding:7px 10px}
+  .mnews b{color:var(--text)}
+  .mnews.pos{border-left-color:var(--signal)} .mnews.pos b{color:var(--signal)}
+  .mnews.neg{border-left-color:var(--danger)} .mnews.neg b{color:var(--danger)}
   .mreasons{display:flex; flex-wrap:wrap; gap:6px; margin-top:10px}
   .mreasons span{font-size:10.5px; color:var(--muted); background:var(--surface2); border:1px solid var(--line);
     border-radius:999px; padding:3px 9px}
@@ -535,6 +542,7 @@
     head.innerHTML='<div class="mhead">Tu saldo: <span class="g">'+euros(mk.myCash||0)+'</span>. '+
       'La liga suele pujar de media <b>+'+pct+'%</b> sobre el precio de salida'+
       (mk.factorSamples?' <span style="color:var(--muted)">('+mk.factorSamples+' subastas)</span>':'')+'.'+
+      (mk.newsCount?' Noticias analizadas en <b>'+mk.newsCount+'</b> jugadores.':'')+
       (mk.learning?'<br><span class="learn">📊 Aprendiendo: con pocas subastas aún, uso una estimación prudente. Se afina con las semanas.</span>':'')+
       '</div>';
     var filters=["Oportunidades","Puedo pagar","Todos"];
@@ -556,6 +564,8 @@
       var cont=it.contenders>0
         ? '<span class="warn">'+it.contenders+' rival'+(it.contenders>1?"es":"")+' pueden pujar</span>'
         : '<span class="up">Nadie te supera</span>';
+      var nw=it.news||{}, nH=nw.headline;
+      var newsHtml=nH?'<a class="mnews'+(nw.signal<0?" neg":nw.signal>0?" pos":"")+'" href="'+esc(nH.url||"#")+'" target="_blank" rel="noopener">📰 '+(nw.tag?'<b>'+esc(nw.tag)+'</b> · ':"")+esc(nH.title||"")+'</a>':"";
       return '<div class="mkt'+op+'">'+
         '<div class="mkt-top"><span class="ppos '+pc+'">'+esc(it.position)+'</span>'+
           '<span class="pinfo"><span class="pname">'+esc(it.name)+hurt+'</span><span class="pteam">'+esc(it.team)+' · '+seller+'</span></span>'+
@@ -564,8 +574,10 @@
           '<div class="box sug"><div class="k">Puja sugerida</div><div class="v">'+euros(it.suggestedBid)+'</div></div></div>'+
         '<div class="meta2"><span>Tendencia <b class="'+tCls+'">'+tTxt+'</b></span>'+
           '<span>Pts/M <b>'+it.pointsPerM+'</b></span>'+
+          (it.form!=null?'<span>Forma <b>'+it.form+'</b></span>':"")+
           (it.canAfford?'':'<span class="warn">No te llega</span>')+
           '<span>'+cont+'</span></div>'+
+        (newsHtml?'<div class="mnews-wrap">'+newsHtml+'</div>':"")+
         (it.reasons&&it.reasons.length?'<div class="mreasons">'+it.reasons.map(function(r){return '<span>'+esc(r)+'</span>';}).join("")+'</div>':"")+
       '</div>';
     }).join("");

@@ -53,8 +53,11 @@ import logging
 import sqlite3
 import sys
 import time
+import urllib.parse
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -674,6 +677,107 @@ def _median(xs: list[float]) -> float:
     return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
 
 
+# --- Noticias: Google News RSS + palabras clave ----------------------------
+NEWS_UA = {"User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")}
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _news_titles(query: str, timeout: int = 6) -> list[dict[str, Any]]:
+    url = "https://news.google.com/rss/search?" + urllib.parse.urlencode(
+        {"q": query, "hl": "es", "gl": "ES", "ceid": "ES:es"})
+    resp = requests.get(url, headers=NEWS_UA, timeout=timeout)
+    resp.raise_for_status()
+    root = ET.fromstring(resp.content)
+    out = []
+    for it in root.iter("item"):
+        title = (it.findtext("title") or "").strip()
+        src_el = it.find("source")
+        try:
+            when = parsedate_to_datetime(it.findtext("pubDate") or "")
+        except Exception:
+            when = None
+        out.append({"title": title, "link": (it.findtext("link") or "").strip(),
+                    "source": (src_el.text if src_el is not None else "") or "",
+                    "when": when})
+    return out
+
+
+def _classify_title(title: str) -> tuple[int, str | None]:
+    low = title.lower()
+    def hit(words): return any(w in low for w in words)
+    if hit(("sanción", "sancion", "expulsión", "expulsion", "tarjeta roja", "suspendido")):
+        return -1, "Sanción"
+    if hit(("lesión", "lesion", "lesionado", "baja", "molestias", "rotura", "operado",
+            "operación", "operacion", "descartado", "apartado", "duda", "tocado")):
+        return -1, "Lesión/duda"
+    if hit(("titular", "vuelve", "regresa", "recuperado", "alta médica", "alta medica",
+            "disponible", "convocado", "de vuelta")):
+        return 1, "Vuelve/titular"
+    if hit(("gol", "goles", "doblete", "hat-trick", "hat trick", "racha", "mvp",
+            "estelar", "brilla", "brillante", "figura", "crack")):
+        return 1, "En racha"
+    if hit(("renueva", "renovación", "renovacion")):
+        return 1, "Renueva"
+    if hit(("fichaje", "fichar", "traspaso", "cedido", "cesión", "cesion",
+            "interesa", "oferta", "salida", "adiós", "adios", "rumbo")):
+        return 0, "Rumor mercado"
+    return 0, None
+
+
+def classify_player_news(name: str, titles: list[dict[str, Any]], days: int = 14) -> dict[str, Any]:
+    surn = (name.split()[-1] if name else "").lower()
+    now = datetime.now(timezone.utc)
+    rel = []
+    for t in titles:
+        if surn and surn not in t["title"].lower():
+            continue
+        if t["when"] is not None and (now - t["when"]) > timedelta(days=days):
+            continue
+        rel.append(t)
+    rel.sort(key=lambda t: t["when"] or _EPOCH, reverse=True)
+    signal, tag = 0, None
+    for t in rel[:6]:
+        s, tg = _classify_title(t["title"])
+        if tg and tag is None:
+            tag = tg
+        signal += s
+    signal = 1 if signal > 0 else (-1 if signal < 0 else 0)
+    top = rel[0] if rel else None
+    head = None
+    if top:
+        head = {"title": top["title"], "url": top["link"], "source": top["source"],
+                "date": top["when"].strftime("%Y-%m-%d") if top["when"] else None}
+    return {"signal": signal, "tag": tag, "count": len(rel), "headline": head}
+
+
+def fetch_players_news(name_by_pid: dict[str, dict[str, str]], cache_path: Path) -> dict[str, Any]:
+    """Noticias por jugador (solo los del mercado). Cachea por día y reutiliza la
+    última conocida si la búsqueda de hoy falla, para no quedarnos sin nada."""
+    cache = _load_json(cache_path, {})
+    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    out, ok = {}, 0
+    for pid, info in name_by_pid.items():
+        prev = cache.get(pid)
+        if prev and prev.get("day") == today:
+            out[pid] = prev
+            continue
+        try:
+            name = info["name"]
+            q = f'"{name}" {info.get("team", "")} fútbol'
+            res = classify_player_news(name, _news_titles(q))
+            res["day"] = today
+            out[pid] = cache[pid] = res
+            ok += 1
+        except Exception as e:  # pragma: no cover
+            log.warning("Noticias no disponibles para %s: %s", info.get("name"), e)
+            if prev:
+                out[pid] = prev
+    _save_json(cache_path, cache)
+    log.info("Noticias: %d jugadores consultados hoy.", ok)
+    return out
+
+
 def build_market_intel(client: "BiwengerClient", meta: dict[str, dict[str, Any]],
                        managers: list[dict[str, Any]], my_id: str,
                        my_cash: int | None) -> dict[str, Any]:
@@ -739,7 +843,17 @@ def build_market_intel(client: "BiwengerClient", meta: dict[str, dict[str, Any]]
          for bid, v in by_buyer.items()),
         key=lambda x: x["avgOverbid"], reverse=True)
 
-    # --- 3) oportunidades + puja sugerida ---------------------------------
+    # --- 3) noticias de hoy (solo jugadores en venta) --------------------
+    news_targets: dict[str, dict[str, str]] = {}
+    for s in market["sales"]:
+        pid = str((s.get("player") or {}).get("id") or "")
+        if pid and pid not in news_targets:
+            info = meta.get(pid, {})
+            news_targets[pid] = {"name": info.get("name") or "",
+                                 "team": info.get("team") or ""}
+    news = fetch_players_news(news_targets, HISTORY_DIR / "news.json")
+
+    # --- 4) oportunidades + puja sugerida ---------------------------------
     rivals = [m for m in managers if m["id"] != str(my_id)]
     items = []
     for s in market["sales"]:
@@ -751,58 +865,78 @@ def build_market_intel(client: "BiwengerClient", meta: dict[str, dict[str, Any]]
         value = int(info.get("value") or 0) or list_price
         points = int(info.get("points") or 0)
         pts_last = int(info.get("ptsLast") or 0)
+        played = int(info.get("played") or 0)
+        price_inc = int(info.get("priceInc") or 0)
+        fitness = [x for x in (info.get("fitness") or []) if isinstance(x, (int, float))]
         status = info.get("status") or "ok"
         seller = s.get("user")
         seller_name = seller.get("name") if isinstance(seller, dict) else None
+        pnews = news.get(pid) or {}
+        nsig = pnews.get("signal") or 0
+        ntag = pnews.get("tag")
 
-        # tendencia: solo fiable con varios días de histórico. El día 1 aún no
-        # hay serie, así que no se puntúa (evita marcar todo como "al alza").
+        # tendencia: preferimos el priceIncrement de Biwenger (variación diaria
+        # REAL); si no hay dato en vivo, usamos nuestro histórico de snapshots.
         arr = prices.get(pid) or []
-        trend_real = len(arr) >= 2
-        if trend_real:
-            ref = arr[max(0, len(arr) - 8)][1]
-            cur = arr[-1][1]
-            trend_pct = round((cur - ref) / ref * 100, 1) if ref else 0.0
+        if price_inc and value:
+            trend_pct, trend_real = round(price_inc / value * 100, 1), True
+        elif len(arr) >= 2:
+            ref, cur = arr[max(0, len(arr) - 8)][1], arr[-1][1]
+            trend_pct, trend_real = (round((cur - ref) / ref * 100, 1) if ref else 0.0), True
         else:
-            trend_pct = 0.0
+            trend_pct, trend_real = 0.0, False
 
-        # puja sugerida: precio de salida × factor, mínimo un pelín por encima,
-        # nunca más que tu saldo
+        # puja sugerida: salida × factor, mínimo un pelín por encima, tope tu saldo
         raw = round(list_price * factor)
         raw = max(raw, list_price + max(1, round(list_price * 0.02)))
         suggested = min(raw, my_cash) if my_cash else raw
         can_afford = (my_cash is None) or (my_cash >= list_price)
         contenders = [r["name"] for r in rivals if (r.get("maxBid") or 0) >= suggested]
 
-        # valor deportivo: puntos/M (usa la temporada pasada en pretemporada)
+        # valor deportivo y forma
         eff_points = points if points else pts_last
         ppm = round(eff_points / (list_price / 1e6), 1) if list_price else 0.0
+        form = round(sum(fitness) / len(fitness), 1) if fitness else None
 
-        reasons = []
+        reasons: list[str] = []
         score = 30.0
         if status == "ok":
-            score += 12; reasons.append("En forma")
+            score += 8
         else:
-            score -= 28; reasons.append("Lesión o sanción")
-        score += max(-30.0, min(40.0, ppm / 60 * 40))
+            score -= 26; reasons.append("Lesión o sanción")
+        score += max(-25.0, min(38.0, ppm / 60 * 38))
         if ppm >= 20:
             reasons.append("Buen ratio puntos/precio")
-        score += max(-15.0, min(15.0, trend_pct / 20 * 15))
-        if trend_pct >= 8:
-            reasons.append("Precio al alza")
-        elif trend_pct <= -8:
-            reasons.append("Precio a la baja")
+        if played >= 5 and eff_points > 0:
+            score += 6; reasons.append("Jugador contrastado")
+        if form is not None and form >= 5:
+            score += 8; reasons.append("En buena forma")
+        elif form is not None and form <= 2 and played > 0:
+            score -= 6
+        if trend_real:
+            score += max(-14.0, min(14.0, trend_pct / 20 * 14))
+            if trend_pct >= 5:
+                reasons.append("Precio al alza")
+            elif trend_pct <= -5:
+                reasons.append("Precio a la baja")
+        if nsig < 0:
+            score -= 22; reasons.append("Noticia: " + (ntag or "negativa"))
+        elif nsig > 0:
+            score += 12; reasons.append("Noticia: " + (ntag or "positiva"))
+        elif ntag:
+            reasons.append(ntag)
         if can_afford:
-            score += 10
+            score += 8
         else:
             score -= 12; reasons.append("Supera tu saldo")
         score = int(max(0, min(100, round(score))))
 
-        if status != "ok":
+        bad_news = nsig < 0 and ntag in ("Lesión/duda", "Sanción")
+        if status != "ok" or bad_news:
             label = "Riesgo"
-        elif ppm >= 20 and can_afford:
+        elif (nsig > 0 and ppm >= 12 or ppm >= 22) and can_afford:
             label = "Chollo"
-        elif trend_pct >= 8:
+        elif trend_real and trend_pct >= 6:
             label = "Al alza"
         elif not can_afford:
             label = "Caro para ti"
@@ -821,6 +955,9 @@ def build_market_intel(client: "BiwengerClient", meta: dict[str, dict[str, Any]]
             "value": value,
             "points": points,
             "ptsLast": pts_last,
+            "played": played,
+            "form": form,
+            "priceInc": price_inc,
             "trendPct": trend_pct,
             "trendReal": trend_real,
             "pointsPerM": ppm,
@@ -828,6 +965,7 @@ def build_market_intel(client: "BiwengerClient", meta: dict[str, dict[str, Any]]
             "canAfford": can_afford,
             "contenders": len(contenders),
             "contenderNames": contenders[:6],
+            "news": {"signal": nsig, "tag": ntag, "headline": pnews.get("headline")},
             "label": label,
             "score": score,
             "reasons": reasons,
@@ -843,6 +981,9 @@ def build_market_intel(client: "BiwengerClient", meta: dict[str, dict[str, Any]]
         "aggressiveBuyers": buyer_stats[:5],
         "count": len(items),
         "systemCount": sum(1 for s in market["sales"] if not s.get("user")),
+        "newsCount": sum(1 for it in items if (it.get("news") or {}).get("headline")),
+        "liveStats": any(meta.get(str((s.get("player") or {}).get("id") or ""), {}).get("live")
+                         for s in market["sales"]),
         "items": items,
     }
 
