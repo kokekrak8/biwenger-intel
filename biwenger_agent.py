@@ -93,14 +93,29 @@ class Manager:
     purchases: int = 0
     sales: int = 0
     round_bonus: int = 0
+    clause_increment: int = 0
     tx_count: int = 0
     bonus: int = 0  # ajuste manual (correcciones, sanciones, etc.)
+    balance: int | None = None  # saldo EXACTO si Biwenger lo expone (solo el tuyo)
+
+    @property
+    def estimated(self) -> bool:
+        """True si el saldo es una estimación (rivales); False si es exacto (tú)."""
+        return self.balance is None
 
     @property
     def cash(self) -> int:
-        """Dinero disponible estimado."""
-        return (self.initial_budget - self.purchases + self.sales
-                + self.round_bonus + self.bonus)
+        """Dinero disponible.
+
+        Modo de liga "Plantilla aleatoria + 40M − Valor de Equipo": el saldo de
+        cada manager es 40M − valor_de_equipo, más los premios de jornada y menos
+        los incrementos de cláusula (dinero que no se ve en el valor de equipo).
+        TU saldo se lee exacto de Biwenger; el de los rivales se estima.
+        """
+        if self.balance is not None:
+            return self.balance
+        return (self.initial_budget - self.team_value
+                + self.round_bonus - self.clause_increment + self.bonus)
 
     def max_bid(self, overdraft: int = 0) -> int:
         """Puja máxima Biwenger = saldo + valor_equipo/4 (+ margen opcional)."""
@@ -127,12 +142,15 @@ class BiwengerClient:
     BASE = "https://biwenger.as.com/api/v2"
     LOGIN_URL = BASE + "/auth/login"                 # POST {email, password} -> {token}
     ACCOUNT_URL = BASE + "/account"                  # GET  -> tus ligas y tu user id
-    LEAGUE_URL = BASE + "/league/{lid}?include=all,-lastAccess"   # GET -> standings + jugadores
+    # Liga: la identifica la cabecera X-League. 'fields=*,standings' fuerza que
+    # cada manager traiga su teamValue (imprescindible para el saldo estimado).
+    LEAGUE_URL = BASE + "/league"                    # GET -> standings con teamValue
+    USER_URL = BASE + "/user/{uid}"                  # GET -> plantilla (players) y balance
     BOARD_URL = BASE + "/league/{lid}/board"         # GET -> feed de movimientos
     # Base de datos pública de jugadores de LaLiga (sin login):
     COMPETITION_URL = "https://cf.biwenger.com/api/v2/competitions/la-liga/data"
     # tipos de movimiento que afectan al dinero:
-    BOARD_TYPES = "transfer,market,adminTransfer,roundFinished"
+    BOARD_TYPES = "transfer,market,adminTransfer,roundFinished,clauseIncrement"
     POSITIONS = {1: "POR", 2: "DEF", 3: "MED", 4: "DEL", 5: "ENT"}
     # =========================================================
 
@@ -207,8 +225,10 @@ class BiwengerClient:
 
     # -- datos --------------------------------------------------------------
     def fetch_managers(self) -> list[dict[str, Any]]:
-        resp = self.session.get(self.LEAGUE_URL.format(lid=self.league_id),
-                                timeout=self.timeout)
+        resp = self.session.get(
+            self.LEAGUE_URL,
+            params={"include": "all", "fields": "*,standings"},
+            timeout=self.timeout)
         resp.raise_for_status()
         payload = resp.json()
         data = payload.get("data", payload) if isinstance(payload, dict) else payload
@@ -216,6 +236,38 @@ class BiwengerClient:
         self.league_name = self._last_league.get("name") or self.league_name
         self.league_mode = self._last_league.get("mode") or self.league_mode
         return self._parse_managers(payload)
+
+    def fetch_my_balance(self) -> int | None:
+        """Tu saldo EXACTO. Biwenger solo expone 'balance' para tu propio usuario."""
+        if not self.my_id:
+            return None
+        try:
+            resp = self.session.get(self.USER_URL.format(uid=self.my_id),
+                                    params={"fields": "*"}, timeout=self.timeout)
+            resp.raise_for_status()
+            d = resp.json().get("data", {})
+            b = d.get("balance")
+            return int(b) if b is not None else None
+        except Exception as e:  # pragma: no cover
+            log.warning("No se pudo leer tu balance exacto: %s", e)
+            return None
+
+    def fetch_squads(self, manager_ids: Iterable[str]) -> dict[str, list[dict[str, Any]]]:
+        """Plantilla de cada manager: [{id, owner:{clause,...}}]. Un GET por manager."""
+        squads: dict[str, list[dict[str, Any]]] = {}
+        for uid in manager_ids:
+            try:
+                resp = self.session.get(self.USER_URL.format(uid=uid),
+                                        params={"fields": "players(id,owner)"},
+                                        timeout=self.timeout)
+                resp.raise_for_status()
+                d = resp.json().get("data", {})
+                pls = d.get("players") or []
+                if pls:
+                    squads[str(uid)] = pls
+            except Exception as e:  # pragma: no cover
+                log.warning("No se pudo leer la plantilla de %s: %s", uid, e)
+        return squads
 
     def fetch_ownership(self) -> dict[str, dict[str, Any]]:
         """A partir del último payload de liga, mapea playerId -> dueño (best-effort)."""
@@ -229,9 +281,15 @@ class BiwengerClient:
         return owners
 
     def fetch_all_players(self) -> list[dict[str, Any]]:
-        """Base de datos pública de jugadores de LaLiga (no requiere login)."""
-        resp = self.session.get(self.COMPETITION_URL,
-                                params={"lang": "es", "score": 1}, timeout=self.timeout)
+        """Base de datos pública de jugadores de LaLiga (no requiere login).
+
+        Endpoint público en otro host (cf.biwenger.com): lo pedimos SIN las
+        cabeceras de sesión/auth de la API privada para que no lo rechace.
+        """
+        resp = requests.get(self.COMPETITION_URL,
+                            params={"lang": "es", "score": 2},
+                            headers={"Accept": "application/json"},
+                            timeout=self.timeout)
         resp.raise_for_status()
         data = resp.json().get("data", {})
         players = data.get("players", {})
@@ -323,6 +381,18 @@ class BiwengerClient:
                         txs.append(Transaction(
                             f"round-{rnd}-{uid}", date_iso,
                             str(uid), "bonus", f"jornada {rnd}", bonus))
+
+            elif mtype == "clauseIncrement":
+                # Subida de cláusula: el manager PAGA ese dinero (sale de su saldo)
+                # y no se refleja en el valor de equipo. Hay que restarlo.
+                base_id = str(mv.get("id") or mv.get("date"))
+                for c in (mv.get("content") or []):
+                    uid = (c.get("user") or {}).get("id") if isinstance(c.get("user"), dict) else c.get("user")
+                    amount = int(c.get("amount") or 0)
+                    if uid and amount:
+                        txs.append(Transaction(
+                            f"clause-{base_id}-{uid}", date_iso,
+                            str(uid), "clause", "cláusula", amount))
         return txs
 
 
@@ -378,6 +448,8 @@ class MoneyTracker:
             m.sales += tx.amount
         elif tx.kind == "bonus":
             m.round_bonus += tx.amount
+        elif tx.kind == "clause":
+            m.clause_increment += tx.amount
         m.tx_count += 1
 
     def table(self) -> list[Manager]:
@@ -504,14 +576,24 @@ class Monitor:
         for md in self.client.fetch_managers():
             self.tracker.upsert_manager(md["manager_id"], md["name"],
                                         md["team_value"], md["points"])
-        # La primera vez subimos muchas páginas; después solo la más reciente.
-        pages = 1 if self._bootstrapped else self.first_pages
-        txs = self.client.fetch_transactions(pages=pages)
-        known = self.storage.known_tx_ids()
-        new_txs = [t for t in txs if t.tx_id not in known]
-        for t in new_txs:
-            self.tracker.apply(t)
-        self.storage.save_transactions(new_txs)
+        # Tu saldo EXACTO (Biwenger solo lo expone para tu propio usuario).
+        my_balance = self.client.fetch_my_balance()
+        me = self.tracker.managers.get(str(self.client.my_id))
+        if me is not None and my_balance is not None:
+            me.balance = my_balance
+        # Movimientos del tablón (premios de jornada, cláusulas). En pretemporada
+        # puede no existir todavía; que un fallo del board no rompa el resto.
+        new_txs: list[Transaction] = []
+        try:
+            pages = 1 if self._bootstrapped else self.first_pages
+            txs = self.client.fetch_transactions(pages=pages)
+            known = self.storage.known_tx_ids()
+            new_txs = [t for t in txs if t.tx_id not in known]
+            for t in new_txs:
+                self.tracker.apply(t)
+            self.storage.save_transactions(new_txs)
+        except Exception as e:  # pragma: no cover
+            log.warning("No se pudo leer el tablón (normal en pretemporada): %s", e)
         self.storage.save_managers(self.tracker.managers.values())
         self._bootstrapped = True
         return new_txs
@@ -559,27 +641,45 @@ class Monitor:
         self.client.login()
         self.refresh()  # actualiza managers + dinero
 
+        name_by_id = {m.manager_id: m.name for m in self.tracker.table()}
         managers = []
         for m in self.tracker.table():
             managers.append({
                 "id": m.manager_id, "name": m.name,
                 "cash": m.cash, "maxBid": m.max_bid(self.tracker.overdraft),
                 "teamValue": m.team_value, "points": m.points,
+                "estimated": m.estimated,
                 "purchases": m.purchases, "sales": m.sales,
-                "roundBonus": m.round_bonus, "txCount": m.tx_count,
-                "isYou": m.manager_id == self.client.my_id,
+                "roundBonus": m.round_bonus, "clauseIncrement": m.clause_increment,
+                "txCount": m.tx_count,
+                "isYou": m.manager_id == str(self.client.my_id),
             })
 
+        # Jugadores CON DUEÑO: la plantilla de cada manager (players id + cláusula)
+        # cruzada con la base pública de LaLiga (nombre, posición, equipo, valor).
         players = []
         if include_players:
             try:
-                owners = self.client.fetch_ownership()
-                for p in self.client.fetch_all_players():
-                    own = owners.get(p["id"], {})
-                    players.append({**p,
-                                    "ownerId": own.get("ownerId"),
-                                    "ownerName": own.get("ownerName")})
-            except Exception as e:  # la base de jugadores es opcional
+                meta = {p["id"]: p for p in self.client.fetch_all_players()}
+                squads = self.client.fetch_squads(name_by_id.keys())
+                for owner_id, squad in squads.items():
+                    for p in squad:
+                        pid = str(p.get("id") if isinstance(p, dict) else p)
+                        info = meta.get(pid, {})
+                        owner = p.get("owner") if isinstance(p, dict) else None
+                        clause = (owner or {}).get("clause") if isinstance(owner, dict) else None
+                        players.append({
+                            "id": pid,
+                            "name": info.get("name") or ("#" + pid),
+                            "position": info.get("position") or "OTH",
+                            "team": info.get("team") or "?",
+                            "value": int(info.get("value") or clause or 0),
+                            "points": int(info.get("points") or 0),
+                            "status": info.get("status") or "ok",
+                            "ownerId": owner_id,
+                            "ownerName": name_by_id.get(owner_id),
+                        })
+            except Exception as e:  # los jugadores son opcionales
                 log.warning("No se pudieron cargar los jugadores: %s", e)
 
         data = {
