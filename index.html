@@ -550,8 +550,8 @@
       var pc=(["POR","DEF","MED","DEL","ENT"].indexOf(it.position)>=0)?it.position:"OTH";
       var hurt=(it.status&&it.status!=="ok")?'<span class="dot">●</span>':'';
       var op=(it.label==="Chollo"||it.label==="Al alza")?" op":"";
-      var tCls=it.trendPct>0?"up":(it.trendPct<0?"down":"");
-      var tTxt=(it.trendPct>0?"▲ +":it.trendPct<0?"▼ ":"→ ")+Math.abs(it.trendPct)+"%";
+      var tCls=it.trendReal?(it.trendPct>0?"up":(it.trendPct<0?"down":"")):"";
+      var tTxt=!it.trendReal?"s/ histórico":((it.trendPct>0?"▲ +":it.trendPct<0?"▼ ":"→ ")+Math.abs(it.trendPct)+"%");
       var seller=it.seller?("Vende "+esc(it.seller)):"Sistema";
       var cont=it.contenders>0
         ? '<span class="warn">'+it.contenders+' rival'+(it.contenders>1?"es":"")+' pueden pujar</span>'

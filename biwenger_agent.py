@@ -727,14 +727,16 @@ def build_market_intel(client: "BiwengerClient", meta: dict[str, dict[str, Any]]
         seller = s.get("user")
         seller_name = seller.get("name") if isinstance(seller, dict) else None
 
-        # tendencia: histórico si lo hay; si no, precio actual vs valor base
+        # tendencia: solo fiable con varios días de histórico. El día 1 aún no
+        # hay serie, así que no se puntúa (evita marcar todo como "al alza").
         arr = prices.get(pid) or []
-        if len(arr) >= 2:
+        trend_real = len(arr) >= 2
+        if trend_real:
             ref = arr[max(0, len(arr) - 8)][1]
             cur = arr[-1][1]
+            trend_pct = round((cur - ref) / ref * 100, 1) if ref else 0.0
         else:
-            ref, cur = value, list_price
-        trend_pct = round((cur - ref) / ref * 100, 1) if ref else 0.0
+            trend_pct = 0.0
 
         # puja sugerida: precio de salida × factor, mínimo un pelín por encima,
         # nunca más que tu saldo
@@ -792,6 +794,7 @@ def build_market_intel(client: "BiwengerClient", meta: dict[str, dict[str, Any]]
             "points": points,
             "ptsLast": pts_last,
             "trendPct": trend_pct,
+            "trendReal": trend_real,
             "pointsPerM": ppm,
             "suggestedBid": suggested,
             "canAfford": can_afford,
