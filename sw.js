@@ -1,7 +1,7 @@
 // Service worker de Biwenger Intel.
 // - App shell: cache-first (funciona offline y arranca al instante).
 // - data.json: network-first (siempre intenta los datos más recientes).
-const VERSION = "v3";
+const VERSION = "v4";
 const SHELL = "shell-" + VERSION;
 const SHELL_FILES = [
   "./", "./index.html", "./manifest.webmanifest",

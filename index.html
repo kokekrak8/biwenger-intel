@@ -135,6 +135,40 @@
   .empty{text-align:center; color:var(--muted); padding:50px 20px; font-size:13.5px; line-height:1.6}
   .empty b{color:var(--text)}
 
+  /* mercado */
+  .mhead{background:linear-gradient(180deg,var(--surface2),var(--surface)); border:1px solid var(--line);
+    border-radius:14px; padding:12px 14px; margin-bottom:10px; font-size:12.5px; color:var(--muted); line-height:1.6}
+  .mhead b{color:var(--text)} .mhead .g{color:var(--gold); font-family:var(--mono); font-weight:600}
+  .mhead .learn{display:inline-block; margin-top:7px; font-size:11px; color:var(--gold);
+    border:1px solid rgba(244,196,48,.4); border-radius:999px; padding:2px 10px}
+  .mlist{display:flex; flex-direction:column; gap:9px}
+  .mkt{background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:13px 14px}
+  .mkt.op{border-color:rgba(63,224,162,.38)}
+  .mkt-top{display:flex; align-items:center; gap:10px}
+  .mkt .pinfo{min-width:0; flex:1}
+  .mkt .pname{font-family:var(--disp); font-weight:600; font-size:16px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .mkt .pname .dot{color:var(--danger); font-size:11px; margin-left:5px}
+  .mkt .pteam{font-size:11px; color:var(--muted)}
+  .mlabel{flex:none; font-size:10.5px; font-weight:700; padding:3px 9px; border-radius:999px; letter-spacing:.3px}
+  .mlabel.Chollo{background:rgba(63,224,162,.16); color:var(--signal); border:1px solid rgba(63,224,162,.4)}
+  .mlabel.Alza{background:rgba(244,196,48,.14); color:var(--gold); border:1px solid rgba(244,196,48,.4)}
+  .mlabel.Riesgo{background:rgba(240,122,91,.14); color:var(--danger); border:1px solid rgba(240,122,91,.4)}
+  .mlabel.Caro,.mlabel.Normal{background:var(--surface2); color:var(--muted); border:1px solid var(--line)}
+  .mbid{display:flex; gap:10px; margin-top:11px}
+  .mbid .box{flex:1; background:var(--surface2); border:1px solid var(--line); border-radius:10px; padding:8px 10px}
+  .mbid .box.sug{border-color:rgba(244,196,48,.5); background:rgba(244,196,48,.07)}
+  .mbid .box .k{font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px}
+  .mbid .box .v{font-family:var(--mono); font-weight:700; font-size:15px; margin-top:2px; font-variant-numeric:tabular-nums}
+  .mbid .box.sug .v{color:var(--gold)}
+  .mkt .meta2{display:flex; flex-wrap:wrap; gap:9px 14px; margin-top:11px; padding-top:10px;
+    border-top:1px solid var(--line); font-size:11.5px; color:var(--muted)}
+  .mkt .meta2 b{color:var(--text); font-family:var(--mono); font-weight:500}
+  .mkt .meta2 .up{color:var(--signal)} .mkt .meta2 .down{color:var(--danger)} .mkt .meta2 .warn{color:var(--danger)}
+  .mreasons{display:flex; flex-wrap:wrap; gap:6px; margin-top:10px}
+  .mreasons span{font-size:10.5px; color:var(--muted); background:var(--surface2); border:1px solid var(--line);
+    border-radius:999px; padding:3px 9px}
+  .mscore{flex:none; font-family:var(--disp); font-weight:700; font-size:14px; color:var(--signal); min-width:30px; text-align:right}
+
   nav{position:fixed; bottom:0; left:0; right:0; z-index:6;
     height:calc(var(--tab-h) + env(safe-area-inset-bottom)); padding-bottom:env(safe-area-inset-bottom);
     background:rgba(10,19,16,.94); backdrop-filter:blur(12px); border-top:1px solid var(--line);
@@ -219,13 +253,20 @@
       <div class="note" style="margin-top:12px"><b>~</b> = saldo estimado. Biwenger no muestra el saldo de los rivales; se estima como <b>40M − Valor de Equipo</b> y se le aplican los movimientos del <b>Tablón</b> (cláusulas y abonos de jornada). El tuyo es el real. Muy fiel a principio de temporada; se desvía algo según suben o bajan los precios de los jugadores.</div>
     </section>
 
+    <section class="view" id="view-market">
+      <div class="eyebrow"><span>Mercado de hoy</span><span id="marketCount"></span></div>
+      <div id="marketHead"></div>
+      <div class="chips" id="mktChips"></div>
+      <div class="mlist" id="mlist"></div>
+    </section>
+
     <section class="view" id="view-league">
       <div class="eyebrow"><span>Ajustes de la liga</span></div>
       <div class="cards" id="leagueCards"></div>
       <div class="note">
         <b>Cómo se calcula el dinero.</b> Biwenger no muestra el saldo de los rivales, así que se
-        reconstruye desde el historial de la liga: <code>inicial − compras + ventas + bonus de jornada</code>.
-        La puja máxima usa la fórmula de Biwenger: <code>saldo + valor de equipo ÷ 4</code>.
+        estima según el modo de tu liga: <code>40M − valor de equipo</code>, más premios de jornada y menos
+        pagos de cláusula. El tuyo se lee exacto. La puja máxima usa la fórmula de Biwenger: <code>saldo + valor de equipo ÷ 4</code>.
       </div>
     </section>
 
@@ -248,6 +289,8 @@
   <nav>
     <button class="tab on" data-view="money">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v8M9.5 10.5h3a1.5 1.5 0 010 3h-3"/></svg>Dinero</button>
+    <button class="tab" data-view="market">
+      <svg viewBox="0 0 24 24"><path d="M4 8h16l-1.2 10.2a2 2 0 01-2 1.8H7.2a2 2 0 01-2-1.8L4 8zM8 8V6a4 4 0 018 0v2"/></svg>Mercado</button>
     <button class="tab" data-view="league">
       <svg viewBox="0 0 24 24"><path d="M4 20V6l8-3 8 3v14M4 20h16M9 20v-6h6v6"/></svg>Liga</button>
     <button class="tab" data-view="players">
@@ -474,7 +517,58 @@
     });
     requestAnimationFrame(function(){ board.querySelectorAll(".bar").forEach(function(b){ b.style.width=b.getAttribute("data-w")+"%"; }); });
 
-    renderLeague(L,M); renderPlayers(); renderYou();
+    renderLeague(L,M); renderPlayers(); renderMarket(); renderYou();
+  }
+
+  // --- MERCADO: oportunidades del día + puja sugerida ---
+  var mktFilter="Oportunidades";
+  var LABELCLS={"Chollo":"Chollo","Al alza":"Alza","Riesgo":"Riesgo","Caro para ti":"Caro","Normal":"Normal"};
+  function renderMarket(){
+    var mk=DATA.market, head=$("#marketHead"), box=$("#mlist"), chips=$("#mktChips");
+    $("#marketCount").textContent=(mk&&mk.items&&mk.items.length)?mk.items.length+" en venta":"";
+    if(!mk||!mk.items||!mk.items.length){
+      head.innerHTML=""; chips.innerHTML="";
+      box.innerHTML='<div class="empty"><b>Sin datos de mercado todavía.</b><br>El mercado se genera en la actualización automática diaria. Aparecerá tras la próxima ejecución del robot (mañana por la mañana), o púlsalo a mano desde GitHub → Actions.</div>';
+      return;
+    }
+    var pct=Math.round((mk.leagueFactor-1)*100);
+    head.innerHTML='<div class="mhead">Tu saldo: <span class="g">'+euros(mk.myCash||0)+'</span>. '+
+      'La liga suele pujar de media <b>+'+pct+'%</b> sobre el precio de salida'+
+      (mk.factorSamples?' <span style="color:var(--muted)">('+mk.factorSamples+' subastas)</span>':'')+'.'+
+      (mk.learning?'<br><span class="learn">📊 Aprendiendo: con pocas subastas aún, uso una estimación prudente. Se afina con las semanas.</span>':'')+
+      '</div>';
+    var filters=["Oportunidades","Puedo pagar","Todos"];
+    chips.innerHTML=filters.map(function(f){return '<button class="chip'+(f===mktFilter?" on":"")+'" data-f="'+esc(f)+'">'+f+'</button>';}).join("");
+    chips.querySelectorAll(".chip").forEach(function(c){ c.onclick=function(){ mktFilter=c.getAttribute("data-f"); renderMarket(); }; });
+    var list=mk.items.filter(function(it){
+      if(mktFilter==="Oportunidades") return it.score>=55||it.label==="Chollo"||it.label==="Al alza";
+      if(mktFilter==="Puedo pagar") return it.canAfford;
+      return true;
+    });
+    if(!list.length){ box.innerHTML='<div class="empty">Nada en este filtro. Prueba «Todos».</div>'; return; }
+    box.innerHTML=list.map(function(it){
+      var pc=(["POR","DEF","MED","DEL","ENT"].indexOf(it.position)>=0)?it.position:"OTH";
+      var hurt=(it.status&&it.status!=="ok")?'<span class="dot">●</span>':'';
+      var op=(it.label==="Chollo"||it.label==="Al alza")?" op":"";
+      var tCls=it.trendPct>0?"up":(it.trendPct<0?"down":"");
+      var tTxt=(it.trendPct>0?"▲ +":it.trendPct<0?"▼ ":"→ ")+Math.abs(it.trendPct)+"%";
+      var seller=it.seller?("Vende "+esc(it.seller)):"Sistema";
+      var cont=it.contenders>0
+        ? '<span class="warn">'+it.contenders+' rival'+(it.contenders>1?"es":"")+' pueden pujar</span>'
+        : '<span class="up">Nadie te supera</span>';
+      return '<div class="mkt'+op+'">'+
+        '<div class="mkt-top"><span class="ppos '+pc+'">'+esc(it.position)+'</span>'+
+          '<span class="pinfo"><span class="pname">'+esc(it.name)+hurt+'</span><span class="pteam">'+esc(it.team)+' · '+seller+'</span></span>'+
+          '<span class="mlabel '+(LABELCLS[it.label]||"Normal")+'">'+esc(it.label)+'</span></div>'+
+        '<div class="mbid"><div class="box"><div class="k">Precio salida</div><div class="v">'+euros(it.price)+'</div></div>'+
+          '<div class="box sug"><div class="k">Puja sugerida</div><div class="v">'+euros(it.suggestedBid)+'</div></div></div>'+
+        '<div class="meta2"><span>Tendencia <b class="'+tCls+'">'+tTxt+'</b></span>'+
+          '<span>Pts/M <b>'+it.pointsPerM+'</b></span>'+
+          (it.canAfford?'':'<span class="warn">No te llega</span>')+
+          '<span>'+cont+'</span></div>'+
+        (it.reasons&&it.reasons.length?'<div class="mreasons">'+it.reasons.map(function(r){return '<span>'+esc(r)+'</span>';}).join("")+'</div>':"")+
+      '</div>';
+    }).join("");
   }
 
   function renderLeague(L,M){

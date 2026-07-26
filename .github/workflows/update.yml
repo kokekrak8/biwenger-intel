@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -45,6 +45,18 @@ jobs:
 
       - name: Generar data.json
         run: python biwenger_agent.py export -o data.json -v
+
+      - name: Guardar histórico de mercado (aprendizaje)
+        run: |
+          git config user.name "biwenger-bot"
+          git config user.email "actions@github.com"
+          git add history/ 2>/dev/null || true
+          if ! git diff --cached --quiet; then
+            git commit -m "Histórico de mercado: $(date -u +%Y-%m-%d) [skip ci]"
+            git push
+          else
+            echo "Sin cambios en el histórico."
+          fi
 
       - name: Preparar carpeta pública
         run: |

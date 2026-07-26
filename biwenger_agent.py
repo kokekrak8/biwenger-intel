@@ -253,6 +253,17 @@ class BiwengerClient:
             log.warning("No se pudo leer tu balance exacto: %s", e)
             return None
 
+    def fetch_market(self) -> dict[str, Any]:
+        """Mercado de hoy: jugadores en venta (precio = puja mínima) y tus pujas.
+
+        Cada venta: {date, until, price, player:{id}, user:null|{id,name}}.
+        user=null → lo vende el sistema; user set → lo vende un manager.
+        """
+        resp = self.session.get(self.BASE + "/market", timeout=self.timeout)
+        resp.raise_for_status()
+        d = resp.json().get("data", {})
+        return {"sales": d.get("sales") or [], "offers": d.get("offers") or []}
+
     def fetch_squads(self, manager_ids: Iterable[str]) -> dict[str, list[dict[str, Any]]]:
         """Plantilla de cada manager: [{id, owner:{clause,...}}]. Un GET por manager."""
         squads: dict[str, list[dict[str, Any]]] = {}
@@ -313,6 +324,7 @@ class BiwengerClient:
                     "team": team or "?",
                     "value": int(p.get("price") or 0),
                     "points": int(p.get("points") or 0),
+                    "ptsLast": int(p.get("pointsLastSeason") or 0),
                     "status": p.get("status") or "ok",
                 })
             log.info("Base de jugadores desde el endpoint público (%d).", len(out))
@@ -346,6 +358,42 @@ class BiwengerClient:
             if not batch:
                 break
             out.extend(batch)
+        return out
+
+    def fetch_recent_sales(self, pages: int = 4, page_size: int = 50) -> list[dict[str, Any]]:
+        """Compras cerradas del tablón (para aprender el patrón de puja de la liga):
+        [{id, date, playerId, price, buyerId}]. Best-effort; si el tablón no está
+        disponible (p. ej. pretemporada), devuelve lista vacía."""
+        out: list[dict[str, Any]] = []
+        try:
+            for p in range(pages):
+                resp = self.session.get(
+                    self.BOARD_URL.format(lid=self.league_id),
+                    params={"type": "transfer,market,adminTransfer",
+                            "offset": p * page_size, "limit": page_size},
+                    timeout=self.timeout)
+                resp.raise_for_status()
+                data = resp.json()
+                data = data.get("data", data) if isinstance(data, dict) else data
+                items = data if isinstance(data, list) else (data.get("items") or [])
+                if not items:
+                    break
+                for mv in items:
+                    if mv.get("type") not in ("transfer", "market", "adminTransfer"):
+                        continue
+                    base = str(mv.get("id") or mv.get("date"))
+                    date_iso = _to_iso(mv.get("date"))
+                    for c in (mv.get("content") or []):
+                        buyer = (c.get("to") or {}).get("id") if isinstance(c.get("to"), dict) else None
+                        pl = c.get("player")
+                        pid = (pl or {}).get("id") if isinstance(pl, dict) else pl
+                        amount = int(c.get("amount") or 0)
+                        if buyer and pid and amount:
+                            out.append({"id": f"{base}-{pid}-{buyer}", "date": date_iso,
+                                        "playerId": str(pid), "price": amount,
+                                        "buyerId": str(buyer)})
+        except Exception as e:  # pragma: no cover
+            log.warning("No se pudieron leer las ventas del tablón: %s", e)
         return out
 
     # -- parsers (adáptalos si cambian los nombres de campo) ---------------
@@ -571,6 +619,204 @@ class TelegramNotifier:
 
 
 # ---------------------------------------------------------------------------
+# Inteligencia de mercado
+# ---------------------------------------------------------------------------
+HISTORY_DIR = Path("history")
+DEFAULT_OVERBID = 1.08          # factor de puja por defecto hasta tener datos
+MIN_AUCTION_SAMPLES = 4         # muestras mínimas para fiarnos del factor aprendido
+
+
+def _load_json(path: Path, default: Any) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def _save_json(path: Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def _median(xs: list[float]) -> float:
+    if not xs:
+        return 0.0
+    s = sorted(xs)
+    n = len(s)
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+def build_market_intel(client: "BiwengerClient", meta: dict[str, dict[str, Any]],
+                       managers: list[dict[str, Any]], my_id: str,
+                       my_cash: int | None) -> dict[str, Any]:
+    """Lee el mercado de hoy, actualiza el histórico persistente y calcula
+    oportunidades + puja sugerida, aprendiendo del patrón de puja de la liga."""
+    try:
+        market = client.fetch_market()
+    except Exception as e:
+        log.warning("No se pudo leer el mercado: %s", e)
+        return {}
+
+    today = int(datetime.now(timezone.utc).strftime("%Y%m%d"))
+
+    # --- 1) histórico de precios (para la tendencia) ----------------------
+    prices_path = HISTORY_DIR / "prices.json"
+    prices: dict[str, list[list[int]]] = _load_json(prices_path, {})
+    for s in market["sales"]:
+        pid = str((s.get("player") or {}).get("id") or "")
+        price = int(s.get("price") or 0)
+        if not pid or not price:
+            continue
+        arr = prices.setdefault(pid, [])
+        if not arr or arr[-1][0] != today:
+            arr.append([today, price])
+        else:
+            arr[-1][1] = price
+        if len(arr) > 45:
+            del arr[:len(arr) - 45]
+    _save_json(prices_path, prices)
+
+    # --- 2) subastas cerradas (para aprender el factor de puja) -----------
+    auctions_path = HISTORY_DIR / "auctions.json"
+    auctions: list[dict[str, Any]] = _load_json(auctions_path, [])
+    seen = {a.get("id") for a in auctions}
+    for sale in client.fetch_recent_sales():
+        if sale["id"] in seen:
+            continue
+        info = meta.get(sale["playerId"], {})
+        base_val = int(info.get("value") or 0) or sale["price"]
+        sale["overbid"] = round(sale["price"] / base_val, 4) if base_val else 1.0
+        sale["playerName"] = info.get("name")
+        auctions.append(sale)
+        seen.add(sale["id"])
+    if len(auctions) > 500:
+        auctions = auctions[-500:]
+    _save_json(auctions_path, auctions)
+
+    # factor de puja de la liga (mediana de sobrepuja de las últimas subastas)
+    ratios = [a["overbid"] for a in auctions[-60:] if a.get("overbid")]
+    learned = _median(ratios)
+    samples = len(ratios)
+    factor = learned if samples >= MIN_AUCTION_SAMPLES and learned >= 1 else DEFAULT_OVERBID
+    factor = max(1.0, min(factor, 1.8))
+    # agresividad por comprador (quién suele pujar más alto)
+    by_buyer: dict[str, list[float]] = {}
+    for a in auctions[-120:]:
+        if a.get("overbid"):
+            by_buyer.setdefault(a["buyerId"], []).append(a["overbid"])
+    name_by_id = {m["id"]: m["name"] for m in managers}
+    buyer_stats = sorted(
+        ({"id": bid, "name": name_by_id.get(bid, "?"),
+          "avgOverbid": round(sum(v) / len(v), 3), "samples": len(v)}
+         for bid, v in by_buyer.items()),
+        key=lambda x: x["avgOverbid"], reverse=True)
+
+    # --- 3) oportunidades + puja sugerida ---------------------------------
+    rivals = [m for m in managers if m["id"] != str(my_id)]
+    items = []
+    for s in market["sales"]:
+        pid = str((s.get("player") or {}).get("id") or "")
+        if not pid:
+            continue
+        info = meta.get(pid, {})
+        list_price = int(s.get("price") or 0)
+        value = int(info.get("value") or 0) or list_price
+        points = int(info.get("points") or 0)
+        pts_last = int(info.get("ptsLast") or 0)
+        status = info.get("status") or "ok"
+        seller = s.get("user")
+        seller_name = seller.get("name") if isinstance(seller, dict) else None
+
+        # tendencia: histórico si lo hay; si no, precio actual vs valor base
+        arr = prices.get(pid) or []
+        if len(arr) >= 2:
+            ref = arr[max(0, len(arr) - 8)][1]
+            cur = arr[-1][1]
+        else:
+            ref, cur = value, list_price
+        trend_pct = round((cur - ref) / ref * 100, 1) if ref else 0.0
+
+        # puja sugerida: precio de salida × factor, mínimo un pelín por encima,
+        # nunca más que tu saldo
+        raw = round(list_price * factor)
+        raw = max(raw, list_price + max(1, round(list_price * 0.02)))
+        suggested = min(raw, my_cash) if my_cash else raw
+        can_afford = (my_cash is None) or (my_cash >= list_price)
+        contenders = [r["name"] for r in rivals if (r.get("maxBid") or 0) >= suggested]
+
+        # valor deportivo: puntos/M (usa la temporada pasada en pretemporada)
+        eff_points = points if points else pts_last
+        ppm = round(eff_points / (list_price / 1e6), 1) if list_price else 0.0
+
+        reasons = []
+        score = 30.0
+        if status == "ok":
+            score += 12; reasons.append("En forma")
+        else:
+            score -= 28; reasons.append("Lesión o sanción")
+        score += max(-30.0, min(40.0, ppm / 60 * 40))
+        if ppm >= 20:
+            reasons.append("Buen ratio puntos/precio")
+        score += max(-15.0, min(15.0, trend_pct / 20 * 15))
+        if trend_pct >= 8:
+            reasons.append("Precio al alza")
+        elif trend_pct <= -8:
+            reasons.append("Precio a la baja")
+        if can_afford:
+            score += 10
+        else:
+            score -= 12; reasons.append("Supera tu saldo")
+        score = int(max(0, min(100, round(score))))
+
+        if status != "ok":
+            label = "Riesgo"
+        elif ppm >= 20 and can_afford:
+            label = "Chollo"
+        elif trend_pct >= 8:
+            label = "Al alza"
+        elif not can_afford:
+            label = "Caro para ti"
+        else:
+            label = "Normal"
+
+        items.append({
+            "id": pid,
+            "name": info.get("name") or ("#" + pid),
+            "position": info.get("position") or "OTH",
+            "team": info.get("team") or "?",
+            "status": status,
+            "price": list_price,
+            "until": s.get("until"),
+            "seller": seller_name,           # None = lo vende el sistema
+            "value": value,
+            "points": points,
+            "ptsLast": pts_last,
+            "trendPct": trend_pct,
+            "pointsPerM": ppm,
+            "suggestedBid": suggested,
+            "canAfford": can_afford,
+            "contenders": len(contenders),
+            "contenderNames": contenders[:6],
+            "label": label,
+            "score": score,
+            "reasons": reasons,
+        })
+
+    items.sort(key=lambda x: x["score"], reverse=True)
+    return {
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "myCash": my_cash,
+        "leagueFactor": round(factor, 3),
+        "factorSamples": samples,
+        "learning": samples < MIN_AUCTION_SAMPLES,
+        "aggressiveBuyers": buyer_stats[:5],
+        "count": len(items),
+        "systemCount": sum(1 for s in market["sales"] if not s.get("user")),
+        "items": items,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Monitor
 # ---------------------------------------------------------------------------
 def fmt(n: int) -> str:
@@ -679,12 +925,18 @@ class Monitor:
                 "isYou": m.manager_id == str(self.client.my_id),
             })
 
-        # Jugadores CON DUEÑO: la plantilla de cada manager (players id + cláusula)
-        # cruzada con la base pública de LaLiga (nombre, posición, equipo, valor).
+        # Base pública de LaLiga (nombre, posición, equipo, valor…). La usan tanto
+        # los jugadores con dueño como la inteligencia de mercado.
+        meta: dict[str, dict[str, Any]] = {}
+        try:
+            meta = {p["id"]: p for p in self.client.fetch_all_players()}
+        except Exception as e:
+            log.warning("No se pudo cargar la base de jugadores: %s", e)
+
+        # Jugadores CON DUEÑO: la plantilla de cada manager (players id + cláusula).
         players = []
-        if include_players:
+        if include_players and meta:
             try:
-                meta = {p["id"]: p for p in self.client.fetch_all_players()}
                 squads = self.client.fetch_squads(name_by_id.keys())
                 for owner_id, squad in squads.items():
                     for p in squad:
@@ -706,6 +958,12 @@ class Monitor:
             except Exception as e:  # los jugadores son opcionales
                 log.warning("No se pudieron cargar los jugadores: %s", e)
 
+        # MERCADO: oportunidades del día + puja sugerida (aprende con el tiempo).
+        me = self.tracker.managers.get(str(self.client.my_id))
+        my_cash = me.cash if me is not None else None
+        market = build_market_intel(self.client, meta, managers,
+                                    str(self.client.my_id), my_cash)
+
         data = {
             "generatedAt": datetime.now(timezone.utc).isoformat(),
             "league": {
@@ -719,11 +977,12 @@ class Monitor:
             },
             "managers": managers,
             "players": players,
+            "market": market,
         }
         Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2),
                               encoding="utf-8")
-        log.info("Exportado %s (%d managers, %d jugadores).",
-                 path, len(managers), len(players))
+        log.info("Exportado %s (%d managers, %d jugadores, %d en mercado).",
+                 path, len(managers), len(players), len((market or {}).get("items", [])))
         return data
 
     def run_forever(self, interval: int) -> None:
