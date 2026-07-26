@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0A1310">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Biwenger">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<title>Biwenger Intel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0A1310; --surface:#10201A; --surface2:#16261F; --line:#233629;
+    --text:#EAF2EC; --muted:#7C948A; --gold:#F4C430; --signal:#3FE0A2; --danger:#F07A5B;
+    --disp:"Barlow Semi Condensed", system-ui, sans-serif;
+    --body:"Inter", system-ui, sans-serif;
+    --mono:"JetBrains Mono", ui-monospace, "SF Mono", monospace;
+    --tab-h:64px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg); color:var(--text); font-family:var(--body);
+    -webkit-font-smoothing:antialiased; line-height:1.4; min-height:100vh; overscroll-behavior-y:none;}
+  .app{max-width:560px; margin:0 auto; min-height:100vh; position:relative;
+       padding-bottom:calc(var(--tab-h) + env(safe-area-inset-bottom));}
+  body::before{content:""; position:fixed; inset:0; pointer-events:none; z-index:0;
+    background:radial-gradient(120% 60% at 50% -10%, rgba(244,196,48,.06), transparent 60%);}
+
+  header{position:sticky; top:0; z-index:5; background:rgba(10,19,16,.86);
+    backdrop-filter:blur(10px); border-bottom:1px solid var(--line);
+    padding:calc(env(safe-area-inset-top) + 14px) 18px 12px;}
+  .brand{display:flex; align-items:center; justify-content:space-between; gap:10px}
+  .league-name{font-family:var(--disp); font-weight:700; font-size:22px; letter-spacing:.2px;
+    line-height:1.05; text-transform:uppercase}
+  .updated{font-size:11.5px; color:var(--muted); margin-top:3px; letter-spacing:.3px}
+  .refresh{border:1px solid var(--line); background:var(--surface); color:var(--text);
+    width:38px; height:38px; border-radius:11px; font-size:16px; cursor:pointer; flex:none;
+    display:grid; place-items:center; transition:transform .3s, border-color .2s}
+  .refresh:active{transform:rotate(180deg)}
+  .banner{display:flex; align-items:center; gap:10px; margin-top:12px; padding:10px 12px;
+    background:rgba(244,196,48,.09); border:1px solid rgba(244,196,48,.35); border-radius:12px;
+    font-size:12.5px; color:var(--gold)}
+  .banner button{margin-left:auto; flex:none; background:var(--gold); color:#0A1310; border:none;
+    font-weight:700; font-size:12px; padding:7px 12px; border-radius:9px; cursor:pointer; font-family:var(--body)}
+  .yousum{display:flex; gap:14px; align-items:baseline; margin-top:12px;
+    background:linear-gradient(180deg,var(--surface2),var(--surface));
+    border:1px solid var(--line); border-left:3px solid var(--signal);
+    border-radius:14px; padding:12px 14px}
+  .yousum .lbl{font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.8px}
+  .yousum .big{font-family:var(--mono); font-weight:700; font-size:20px; color:var(--gold);
+    font-variant-numeric:tabular-nums}
+  .yousum .col{display:flex; flex-direction:column; gap:2px}
+  .yousum .rank{margin-left:auto; text-align:right}
+  .yousum .rank .big{color:var(--signal); font-family:var(--disp); font-size:24px}
+
+  main{position:relative; z-index:1; padding:16px 14px 8px}
+  .view{display:none; animation:rise .28s ease both}
+  .view.active{display:block}
+  @keyframes rise{from{opacity:0; transform:translateY(6px)} to{opacity:1; transform:none}}
+  .eyebrow{font-size:11px; letter-spacing:1.4px; text-transform:uppercase; color:var(--muted);
+    margin:2px 4px 12px; display:flex; justify-content:space-between; align-items:center}
+
+  .board{display:flex; flex-direction:column; gap:9px}
+  .row{position:relative; background:var(--surface); border:1px solid var(--line);
+    border-radius:14px; padding:13px 14px 15px; overflow:hidden}
+  .row.you{border-color:rgba(63,224,162,.55); box-shadow:0 0 0 1px rgba(63,224,162,.18) inset}
+  .row .top{display:flex; align-items:baseline; gap:10px; position:relative; z-index:1}
+  .pos{font-family:var(--disp); font-weight:700; font-size:15px; color:var(--muted); width:22px; flex:none}
+  .row.you .pos{color:var(--signal)}
+  .name{font-family:var(--disp); font-weight:600; font-size:18px; letter-spacing:.2px;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .tag{font-size:10px; font-weight:600; color:var(--signal); border:1px solid rgba(63,224,162,.4);
+    padding:1px 6px; border-radius:999px; letter-spacing:.5px; flex:none}
+  .cash{margin-left:auto; font-family:var(--mono); font-weight:700; font-size:19px; color:var(--gold);
+    font-variant-numeric:tabular-nums; flex:none}
+  .bidwrap{margin-top:11px; position:relative; z-index:1}
+  .bidlbl{display:flex; justify-content:space-between; font-size:10.5px; color:var(--muted);
+    letter-spacing:.4px; margin-bottom:5px; text-transform:uppercase}
+  .bidlbl b{color:var(--text); font-family:var(--mono); font-weight:500;
+    font-variant-numeric:tabular-nums; letter-spacing:0}
+  .track{height:7px; background:#0c1a14; border-radius:99px; overflow:hidden}
+  .bar{height:100%; border-radius:99px; width:0;
+    background:linear-gradient(90deg, rgba(244,196,48,.55), var(--gold));
+    transition:width .6s cubic-bezier(.2,.8,.2,1)}
+  .row.you .bar{background:linear-gradient(90deg, rgba(63,224,162,.5), var(--signal))}
+  .meta{display:flex; gap:14px; margin-top:11px; padding-top:10px; border-top:1px solid var(--line);
+    font-size:11.5px; color:var(--muted)}
+  .meta span b{color:var(--text); font-family:var(--mono); font-weight:500; font-variant-numeric:tabular-nums}
+
+  .cards{display:grid; grid-template-columns:1fr 1fr; gap:10px}
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:14px}
+  .card.full{grid-column:1/-1}
+  .card .k{font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.7px}
+  .card .v{font-family:var(--mono); font-weight:700; font-size:22px; margin-top:6px; color:var(--gold);
+    font-variant-numeric:tabular-nums}
+  .card .v.plain{color:var(--text); font-family:var(--disp); letter-spacing:.3px}
+  .note{background:var(--surface2); border:1px dashed var(--line); border-radius:14px;
+    padding:13px 14px; font-size:12.5px; color:var(--muted); margin-top:12px; line-height:1.5}
+  .note b{color:var(--text)}
+  .note code{font-family:var(--mono); color:var(--signal); font-size:11.5px}
+
+  .search{width:100%; background:var(--surface); border:1px solid var(--line); border-radius:12px;
+    color:var(--text); font-family:var(--body); font-size:14px; padding:11px 13px; margin-bottom:10px}
+  .search::placeholder{color:var(--muted)}
+  .chips{display:flex; gap:7px; overflow-x:auto; padding-bottom:10px; scrollbar-width:none}
+  .chips::-webkit-scrollbar{display:none}
+  .chip{flex:none; border:1px solid var(--line); background:var(--surface); color:var(--muted);
+    font-size:12px; font-weight:600; padding:7px 12px; border-radius:999px; cursor:pointer;
+    letter-spacing:.3px; transition:.15s}
+  .chip.on{background:var(--gold); color:#0A1310; border-color:var(--gold)}
+  .plist{display:flex; flex-direction:column; gap:7px}
+  .prow{display:flex; align-items:center; gap:11px; background:var(--surface);
+    border:1px solid var(--line); border-radius:12px; padding:10px 12px}
+  .ppos{font-family:var(--disp); font-weight:700; font-size:11px; width:34px; text-align:center;
+    padding:3px 0; border-radius:6px; flex:none; color:#0A1310}
+  .ppos.POR{background:#e8b04f} .ppos.DEF{background:#59b3f0}
+  .ppos.MED{background:#3fe0a2} .ppos.DEL{background:#f07a5b}
+  .ppos.ENT{background:#b48ee0} .ppos.OTH{background:#7c948a}
+  .pinfo{min-width:0; flex:1}
+  .pname{font-family:var(--disp); font-weight:600; font-size:15.5px; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis}
+  .pname .dot{color:var(--danger); font-size:11px; margin-left:5px}
+  .pteam{font-size:11px; color:var(--muted)}
+  .pright{text-align:right; flex:none}
+  .pval{font-family:var(--mono); font-weight:700; font-size:14px; color:var(--gold); font-variant-numeric:tabular-nums}
+  .powner{font-size:10.5px; margin-top:3px}
+  .powner .b{color:var(--muted)} .powner .free{color:var(--signal)}
+  .empty{text-align:center; color:var(--muted); padding:50px 20px; font-size:13.5px; line-height:1.6}
+  .empty b{color:var(--text)}
+
+  nav{position:fixed; bottom:0; left:0; right:0; z-index:6;
+    height:calc(var(--tab-h) + env(safe-area-inset-bottom)); padding-bottom:env(safe-area-inset-bottom);
+    background:rgba(10,19,16,.94); backdrop-filter:blur(12px); border-top:1px solid var(--line);
+    display:flex; max-width:560px; margin:0 auto}
+  .tab{flex:1; background:none; border:none; color:var(--muted); font-family:var(--body);
+    font-size:10.5px; font-weight:600; letter-spacing:.3px; cursor:pointer; display:flex;
+    flex-direction:column; align-items:center; justify-content:center; gap:4px; padding-top:8px}
+  .tab svg{width:22px; height:22px; stroke:currentColor; fill:none; stroke-width:1.7}
+  .tab.on{color:var(--gold)}
+
+  /* overlays: onboarding + setup */
+  .sheet{position:fixed; inset:0; z-index:20; background:var(--bg); display:none;
+    flex-direction:column; padding:calc(env(safe-area-inset-top) + 26px) 20px 26px; overflow-y:auto}
+  .sheet.show{display:flex}
+  .sheet h1{font-family:var(--disp); font-weight:700; font-size:30px; text-transform:uppercase;
+    line-height:1; margin:0 0 6px}
+  .sheet h1 .gold{color:var(--gold)}
+  .sheet p.sub{color:var(--muted); font-size:14px; margin:0 0 22px}
+  .q{font-size:12px; text-transform:uppercase; letter-spacing:1px; color:var(--muted); margin:6px 0 12px}
+  .grid{display:grid; grid-template-columns:1fr 1fr; gap:10px}
+  .pick{background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px 14px;
+    text-align:left; cursor:pointer; color:var(--text); transition:.15s; width:100%}
+  .pick:hover{border-color:var(--signal)}
+  .pick .pn{font-family:var(--disp); font-weight:600; font-size:18px}
+  .pick .pc{font-family:var(--mono); font-size:12px; color:var(--gold); margin-top:4px; font-variant-numeric:tabular-nums}
+
+  .step{display:flex; gap:11px; margin-bottom:14px}
+  .step .n{flex:none; width:24px; height:24px; border-radius:50%; background:var(--surface2);
+    border:1px solid var(--line); color:var(--gold); font-family:var(--disp); font-weight:700;
+    display:grid; place-items:center; font-size:13px; margin-top:1px}
+  .step .t{font-size:13.5px; color:var(--text); line-height:1.5}
+  .step .t small{color:var(--muted); display:block; font-size:12px; margin-top:2px}
+  .code{background:#0c1a14; border:1px solid var(--line); border-radius:10px; padding:10px 11px;
+    font-family:var(--mono); font-size:10.5px; color:var(--signal); word-break:break-all;
+    max-height:96px; overflow:auto; margin:8px 0 4px}
+  .field{margin:14px 0}
+  .field label{font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.6px; display:block; margin-bottom:7px}
+  textarea, .num{width:100%; background:var(--surface); border:1px solid var(--line); border-radius:12px;
+    color:var(--text); font-family:var(--mono); font-size:12.5px; padding:12px}
+  textarea{min-height:120px; resize:vertical}
+  .num{font-size:15px}
+  .btn{width:100%; padding:14px; border-radius:12px; border:1px solid var(--line); background:var(--surface);
+    color:var(--text); font-family:var(--disp); font-weight:600; font-size:16px; letter-spacing:.3px;
+    cursor:pointer; margin-top:8px}
+  .btn.primary{background:var(--gold); color:#0A1310; border-color:var(--gold)}
+  .btn.ghost{background:none; color:var(--muted)}
+  .sec{border-top:1px solid var(--line); margin-top:22px; padding-top:20px}
+  .sec h2{font-family:var(--disp); font-weight:600; font-size:19px; margin:0 0 4px}
+  .sec .hint{font-size:12.5px; color:var(--muted); margin:0 0 12px; line-height:1.5}
+  .msg{font-size:12.5px; margin-top:10px; min-height:16px}
+  .msg.err{color:var(--danger)} .msg.ok{color:var(--signal)}
+  .filerow{display:flex; align-items:center; gap:10px}
+  input[type=file]{font-size:12px; color:var(--muted)}
+  @media (prefers-reduced-motion: reduce){*{animation:none!important; transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand">
+      <div>
+        <div class="league-name" id="leagueName">—</div>
+        <div class="updated" id="updated"></div>
+      </div>
+      <button class="refresh" id="refreshBtn" title="Actualizar" aria-label="Actualizar">↻</button>
+    </div>
+    <div class="banner" id="demoBanner" hidden>
+      <span>Estás viendo una liga de ejemplo.</span>
+      <button id="bannerSetup">Poner mi liga</button>
+    </div>
+    <div class="yousum" id="yousum" hidden>
+      <div class="col"><span class="lbl">Tu dinero</span><span class="big" id="youCash">—</span></div>
+      <div class="col"><span class="lbl">Puja máx.</span><span class="big" id="youBid" style="color:var(--text)">—</span></div>
+      <div class="col rank"><span class="lbl">Posición</span><span class="big rank" id="youRank">—</span></div>
+    </div>
+  </header>
+
+  <main>
+    <section class="view active" id="view-money">
+      <div class="eyebrow"><span>Dinero de la liga</span><span id="moneyCount"></span></div>
+      <div class="board" id="board"></div>
+      <div class="note" style="margin-top:12px"><b>~</b> = saldo estimado. Biwenger no muestra el saldo de los rivales; se estima como <b>40M − Valor de Equipo</b> y se le aplican los movimientos del <b>Tablón</b> (cláusulas y abonos de jornada). El tuyo es el real. Muy fiel a principio de temporada; se desvía algo según suben o bajan los precios de los jugadores.</div>
+    </section>
+
+    <section class="view" id="view-league">
+      <div class="eyebrow"><span>Ajustes de la liga</span></div>
+      <div class="cards" id="leagueCards"></div>
+      <div class="note">
+        <b>Cómo se calcula el dinero.</b> Biwenger no muestra el saldo de los rivales, así que se
+        reconstruye desde el historial de la liga: <code>inicial − compras + ventas + bonus de jornada</code>.
+        La puja máxima usa la fórmula de Biwenger: <code>saldo + valor de equipo ÷ 4</code>.
+      </div>
+    </section>
+
+    <section class="view" id="view-players">
+      <div class="eyebrow"><span>Jugadores</span><span id="playersCount"></span></div>
+      <input class="search" id="search" placeholder="Buscar jugador o equipo…" autocomplete="off">
+      <div class="chips" id="posChips"></div>
+      <div class="plist" id="plist"></div>
+    </section>
+
+    <section class="view" id="view-you">
+      <div class="eyebrow"><span>Tu perfil</span></div>
+      <div class="cards" id="youCards"></div>
+      <button class="btn" id="changeMe" style="margin-top:14px">Cambiar de manager</button>
+      <button class="btn" id="openSetup" style="margin-top:8px">Actualizar / reimportar mi liga</button>
+      <button class="btn ghost" id="resetData" style="margin-top:2px">Borrar mis datos</button>
+    </section>
+  </main>
+
+  <nav>
+    <button class="tab on" data-view="money">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v8M9.5 10.5h3a1.5 1.5 0 010 3h-3"/></svg>Dinero</button>
+    <button class="tab" data-view="league">
+      <svg viewBox="0 0 24 24"><path d="M4 20V6l8-3 8 3v14M4 20h16M9 20v-6h6v6"/></svg>Liga</button>
+    <button class="tab" data-view="players">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="7" r="3.2"/><path d="M5 20c0-4 3-6 7-6s7 2 7 6"/></svg>Jugadores</button>
+    <button class="tab" data-view="you">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M6 21c0-3.3 2.7-6 6-6s6 2.7 6 6"/></svg>Tú</button>
+  </nav>
+</div>
+
+<!-- ONBOARDING: ¿quién eres? -->
+<div class="sheet" id="onb">
+  <h1>¿Cuál eres<br>tú?</h1>
+  <p class="sub">Elige tu manager para personalizar la vista.</p>
+  <div class="grid" id="pickGrid"></div>
+</div>
+
+<!-- SETUP: importar mi liga -->
+<div class="sheet" id="setup">
+  <h1>Pon tu liga en<br><span class="gold">Biwenger Intel</span></h1>
+  <p class="sub">Se hace todo en el móvil, sin instalar nada.</p>
+
+  <div class="step"><span class="n">1</span><span class="t">Abre <b>Biwenger</b> en el navegador y entra en tu liga (con la sesión iniciada).</span></div>
+  <div class="step"><span class="n">2</span><span class="t">Ejecuta el <b>Paso 1 (escuchar)</b> de abajo. Luego navega por <b>Clasificación</b>, el <b>Tablón/Actividad</b>, <b>2–3 equipos rivales</b> y <b>Mercado</b>.
+    <small>Así Biwenger carga el valor de equipo, los movimientos de dinero y las plantillas.</small></span></div>
+  <div class="step"><span class="n">3</span><span class="t">Ejecuta el <b>Paso 2 (descargar)</b>: se baja <b>biwenger-todo.json</b>.</span></div>
+  <div class="step"><span class="n">4</span><span class="t">Pon tu <b>presupuesto inicial</b>, pulsa <b>Elegir archivo</b> y selecciona ese archivo.</span></div>
+
+  <div class="field">
+    <label>Presupuesto inicial de tu liga (€)</label>
+    <input class="num" id="initBudget" type="number" inputmode="numeric" value="40000000">
+  </div>
+  <div class="field">
+    <label>Reparto inicial de tu liga</label>
+    <select class="num" id="initMode">
+      <option value="minusTeam">Plantilla aleatoria + 40M − Valor de Equipo</option>
+      <option value="flat">Todos empiezan con el mismo dinero</option>
+    </select>
+  </div>
+
+  <div class="filerow" style="margin-top:6px">
+    <span style="font-size:12.5px;color:var(--muted)">Cargar tu archivo (biwenger-todo.json)</span>
+    <input type="file" id="fileInput" accept=".json,application/json">
+  </div>
+
+  <div class="field" style="margin-top:14px">
+    <label>…o pega aquí el contenido</label>
+    <textarea id="importBox" placeholder="Pega lo que descargó el capturador…"></textarea>
+  </div>
+  <button class="btn primary" id="doImport">Crear mi liga</button>
+  <div class="msg" id="importMsg"></div>
+
+  <button class="btn" id="exportJson" style="margin-top:12px">Descargar data.json (para hosting)</button>
+
+  <div class="sec">
+    <h2>El capturador (2 pasos)</h2>
+    <p class="hint">Guarda cada paso como un <b>marcador</b> (copia el texto y pégalo como su dirección),
+      o pégalos en la <b>consola</b> (DevTools) de Biwenger.</p>
+    <div style="font-size:12px;color:var(--gold);margin:6px 0 4px">Paso 1 — Escuchar</div>
+    <div class="code" id="bmCode1"></div>
+    <button class="btn" id="copyBm1">Copiar Paso 1</button>
+    <div style="font-size:12px;color:var(--gold);margin:14px 0 4px">Paso 2 — Descargar</div>
+    <div class="code" id="bmCode2"></div>
+    <button class="btn" id="copyBm2">Copiar Paso 2</button>
+  </div>
+
+  <button class="btn ghost" id="closeSetup" style="margin-top:18px">Ver el ejemplo primero</button>
+</div>
+
+<script id="sample" type="application/json">
+{"generatedAt":"2026-07-26T06:00:00+00:00","league":{"id":"777","name":"Liga de ejemplo","mode":"standard","initialBudget":40000000,"overdraft":0,"memberCount":6,"youId":null},"managers":[{"id":"13","name":"Nacho","cash":58200000,"maxBid":71700000,"teamValue":54000000,"points":88,"purchases":31000000,"sales":48200000,"roundBonus":1000000,"txCount":22,"isYou":false},{"id":"11","name":"Beto","cash":49000000,"maxBid":62000000,"teamValue":52000000,"points":95,"purchases":18000000,"sales":25200000,"roundBonus":1800000,"txCount":14,"isYou":false},{"id":"12","name":"Caro","cash":41500000,"maxBid":51500000,"teamValue":40000000,"points":140,"purchases":22000000,"sales":21300000,"roundBonus":2200000,"txCount":19,"isYou":false},{"id":"10","name":"Jorge","cash":28000000,"maxBid":40000000,"teamValue":48000000,"points":120,"purchases":34000000,"sales":19500000,"roundBonus":2500000,"txCount":25,"isYou":false},{"id":"14","name":"Lucía","cash":19800000,"maxBid":30300000,"teamValue":42000000,"points":110,"purchases":29000000,"sales":7300000,"roundBonus":1100000,"txCount":12,"isYou":false},{"id":"15","name":"Dani","cash":12400000,"maxBid":24900000,"teamValue":50000000,"points":102,"purchases":41000000,"sales":11600000,"roundBonus":900000,"txCount":18,"isYou":false}],"players":[{"id":"1","name":"Vinicius","position":"DEL","team":"Real Madrid","value":32000000,"points":152,"status":"ok","ownerId":"10","ownerName":"Jorge"},{"id":"2","name":"Pedri","position":"MED","team":"Barcelona","value":26000000,"points":141,"status":"injured","ownerId":"12","ownerName":"Caro"},{"id":"3","name":"Lewandowski","position":"DEL","team":"Barcelona","value":24000000,"points":168,"status":"ok","ownerId":"11","ownerName":"Beto"},{"id":"4","name":"Rodri","position":"MED","team":"Man City","value":21000000,"points":133,"status":"ok","ownerId":null,"ownerName":null},{"id":"5","name":"Oyarzabal","position":"DEL","team":"Real Sociedad","value":15000000,"points":121,"status":"ok","ownerId":"13","ownerName":"Nacho"}]}
+</script>
+
+<script>
+(function(){
+  "use strict";
+  var mem={};
+  var store={
+    get:function(k){ try{return localStorage.getItem(k)}catch(e){return mem[k]||null} },
+    set:function(k,v){ try{localStorage.setItem(k,v)}catch(e){mem[k]=v} },
+    del:function(k){ try{localStorage.removeItem(k)}catch(e){delete mem[k]} }
+  };
+  var $=function(s){return document.querySelector(s)};
+  var DATA=null, YOU=null, isDemo=false;
+  var nf=new Intl.NumberFormat("es-ES");
+  function euros(n){ return nf.format(Math.round(n||0))+" €"; }
+  function millions(n){ return (Math.round((n||0)/1e5)/10).toString().replace(".",",")+" M"; }
+  function ago(iso){ var d=new Date(iso), s=(Date.now()-d.getTime())/1000;
+    if(isNaN(s))return ""; if(s<3600)return "hace "+Math.max(1,Math.round(s/60))+" min";
+    if(s<86400)return "hace "+Math.round(s/3600)+" h"; return "hace "+Math.round(s/86400)+" días"; }
+  function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];}); }
+  function mapPos(p){ return ({1:"POR",2:"DEF",3:"MED",4:"DEL",5:"ENT"})[p]||"OTH"; }
+
+  // --- reconstrucción del dinero (misma lógica que el recolector Python) ---
+  function reconstruct(raw, initial, mode){
+    if(raw && raw.managers && raw.league) return raw;          // ya es un data.json
+    var lg = raw.league ? (raw.league.data||raw.league) : (raw.data||raw);
+    var bd = raw.board ? (raw.board.data||raw.board) : (raw.board||[]);
+    if(!Array.isArray(bd)) bd = bd.items||bd.board||[];
+    var standings = lg.standings||lg.users||[];
+    if(!standings.length) throw new Error("No encuentro los managers en los datos pegados.");
+    var mgr={};
+    function ensure(id){ if(!mgr[id]) mgr[id]={id:id,name:"?",teamValue:0,points:0,purchases:0,sales:0,roundBonus:0,txCount:0}; return mgr[id]; }
+    var players=[];
+    standings.forEach(function(s){
+      var m=ensure(String(s.id)); m.name=s.name||"?"; m.teamValue=+(s.teamValue||0); m.points=+(s.points||0);
+      (s.players||[]).forEach(function(p){ var pd=p.player||p;
+        players.push({id:String(pd.id||p.id||""), name:pd.name||"?", position:mapPos(pd.position),
+          team:(pd.team&&(pd.team.name||pd.team))||"?", value:+(pd.price||pd.value||0),
+          points:+(pd.points||0), status:pd.status||"ok", ownerId:String(s.id), ownerName:s.name}); });
+    });
+    bd.forEach(function(mv){
+      var t=mv.type;
+      if(t==="transfer"||t==="market"||t==="adminTransfer"){
+        (mv.content||[]).forEach(function(c){
+          var amt=+(c.amount||0), to=c.to&&c.to.id, from=c.from&&c.from.id;
+          if(to){var b=ensure(String(to)); b.purchases+=amt; b.txCount++;}
+          if(from){var se=ensure(String(from)); se.sales+=amt; se.txCount++;}
+        });
+      } else if(t==="roundFinished"){
+        ((mv.content&&mv.content.results)||[]).forEach(function(r){
+          var uid=r.user&&r.user.id, bo=+(r.bonus||0); if(uid&&bo) ensure(String(uid)).roundBonus+=bo; });
+      }
+    });
+    var managers=Object.keys(mgr).map(function(k){ var m=mgr[k];
+      var cash = (mode==="flat")
+        ? (initial - m.purchases + m.sales + m.roundBonus)
+        : (initial - m.teamValue + m.roundBonus);   // 40M − Valor de Equipo (+ premios)
+      return {id:m.id,name:m.name,cash:cash,maxBid:cash+Math.floor(m.teamValue/4),teamValue:m.teamValue,
+        points:m.points,purchases:m.purchases,sales:m.sales,roundBonus:m.roundBonus,txCount:m.txCount,isYou:false}; });
+    return {generatedAt:new Date().toISOString(),
+      league:{id:String(lg.id||""),name:lg.name||"Mi liga",mode:lg.mode||null,initialBudget:initial,
+        overdraft:0,memberCount:managers.length,youId:null},
+      managers:managers, players:players};
+  }
+
+  // --- parser del volcado completo (biwenger-todo.json): clasificación con
+  //     valor de equipo + plantillas por usuario + base de jugadores de LaLiga ---
+  function parseDump(C, initial, mode){
+    function dd(b){return b&&b.data!==undefined?b.data:b;}
+    var POS={1:"POR",2:"DEF",3:"MED",4:"DEL",5:"ENT"},i;
+    var league=null;
+    for(i=0;i<C.length;i++){var x=dd(C[i].body);if(!x)continue;var us=x.users||x.standings;
+      if(us&&us.length&&us.some(function(u){return u&&u.teamValue!==undefined})){league=x;break;}}
+    if(!league)throw new Error("No encuentro la clasificación con valor de equipo. Al capturar, abre la pestaña Clasificación en Biwenger.");
+    var users=league.users||league.standings||[];
+    var comp=null;for(i=0;i<C.length;i++){if(/competitions\/[^/]+\/data/.test(C[i].url||"")){comp=dd(C[i].body);break;}}
+    var cp=(comp&&comp.players)||{},ct=(comp&&comp.teams)||{};
+    var squads={},balances={},youId=null;
+    for(i=0;i<C.length;i++){var mm=(C[i].url||"").match(/\/api\/v2\/user\/(\d+)/);if(!mm)continue;var ud=dd(C[i].body);if(!ud)continue;
+      var pls=ud.players;if(pls&&pls.length)squads[mm[1]]=pls;
+      if(ud.balance!=null){balances[mm[1]]=+ud.balance;youId=youId||mm[1];}}
+    // correcciones de dinero del tablón (cláusulas y abonos de jornada) desde el último reinicio
+    var board=null;
+    for(i=0;i<C.length;i++){var bx=dd(C[i].body);
+      if(Array.isArray(bx)&&bx.length&&bx[0]&&bx[0].type&&bx[0].content!==undefined){ if(!board||bx.length>board.length)board=bx; }}
+    var corr={};
+    if(board){
+      var reset=0;board.forEach(function(m){if(m.type==="leagueReset"&&(m.date||0)>reset)reset=m.date;});
+      board.forEach(function(m){ if(reset&&(m.date||0)<reset)return; var Cc=m.content;
+        if(m.type==="clauseIncrement"&&Cc&&Cc.length){Cc.forEach(function(x){var id=x.user&&String(x.user.id);if(id)corr[id]=(corr[id]||0)-(+x.amount||0);});}
+        else if(m.type==="roundFinished"&&Cc&&Cc.results){Cc.results.forEach(function(r){var id=r.user&&String(r.user.id);if(id)corr[id]=(corr[id]||0)+(+r.bonus||0);});}
+      });
+    }
+    var managers=users.map(function(u){var uid=String(u.id),tv=+(u.teamValue||0);
+      var exact=balances.hasOwnProperty(uid);
+      var cash=exact?balances[uid]:((mode==="flat")?initial:(initial-tv+(corr[uid]||0)));
+      return {id:uid,name:u.name||"?",teamValue:tv,points:+(u.points||0),cash:cash,estimated:!exact,
+        maxBid:cash+Math.floor(tv/4),purchases:0,sales:0,roundBonus:(corr[uid]||0),txCount:+(u.teamSize||0),
+        isYou:uid===youId}; });
+    var players=[];Object.keys(squads).forEach(function(uid){
+      var owner=users.filter(function(u){return String(u.id)===uid})[0];
+      squads[uid].forEach(function(p){var pid=String(p.id||p);var meta=cp[pid]||{};var tm=ct[String(meta.teamID||"")];
+        players.push({id:pid,name:meta.name||("#"+pid),position:POS[meta.position]||"OTH",team:(tm&&tm.name)||"?",
+          value:+(meta.price||(p.owner&&p.owner.clause)||0),points:+(meta.points||0),status:meta.status||"ok",
+          ownerId:uid,ownerName:owner&&owner.name});});});
+    return {generatedAt:new Date().toISOString(),
+      league:{id:String(league.id||""),name:league.name||"Mi liga",mode:"40M − Valor de Equipo",
+        initialBudget:initial,overdraft:0,memberCount:managers.length,youId:youId},
+      managers:managers,players:players};
+  }
+
+  // --- carga de datos: guardado > data.json > ejemplo ---
+  function loadData(){
+    var saved=store.get("dataset");
+    if(saved){ try{ isDemo=false; return Promise.resolve(JSON.parse(saved)); }catch(e){} }
+    return fetch("data.json",{cache:"no-store"})
+      .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+      .then(function(j){ isDemo=false; return j; })
+      .catch(function(){ isDemo=true; return JSON.parse($("#sample").textContent); });
+  }
+
+  function saveDataset(d){ store.set("dataset", JSON.stringify(d)); isDemo=false; }
+
+  function render(){
+    var L=DATA.league, M=DATA.managers.slice();
+    $("#leagueName").textContent=L.name||"Mi liga";
+    $("#updated").textContent=(isDemo?"Ejemplo · ":"Actualizado ")+(isDemo?"":ago(DATA.generatedAt));
+    $("#demoBanner").hidden=!isDemo;
+
+    var savedId=store.get("youId");
+    YOU = M.find(function(m){return m.id===savedId}) || M.find(function(m){return m.isYou}) || null;
+    M.sort(function(a,b){return b.cash-a.cash});
+    var maxBid=Math.max.apply(null, M.map(function(m){return m.maxBid||0}).concat([1]));
+
+    var ys=$("#yousum");
+    if(YOU){ ys.hidden=false; $("#youCash").textContent=euros(YOU.cash);
+      $("#youBid").textContent=euros(YOU.maxBid);
+      $("#youRank").textContent="#"+(M.findIndex(function(m){return m.id===YOU.id})+1);
+    } else ys.hidden=true;
+
+    $("#moneyCount").textContent=M.length+" managers";
+    var board=$("#board"); board.innerHTML="";
+    M.forEach(function(m,i){
+      var mine=YOU&&m.id===YOU.id;
+      var el=document.createElement("div"); el.className="row"+(mine?" you":"");
+      el.innerHTML='<div class="top"><span class="pos">'+(i+1)+'</span>'+
+        '<span class="name">'+esc(m.name)+'</span>'+(mine?'<span class="tag">TÚ</span>':'')+
+        '<span class="cash">'+(m.estimated?"~":"")+euros(m.cash)+'</span></div>'+
+        '<div class="bidwrap"><div class="bidlbl"><span>Puja máxima</span><b>'+euros(m.maxBid)+'</b></div>'+
+        '<div class="track"><div class="bar" data-w="'+Math.round((m.maxBid/maxBid)*100)+'"></div></div></div>'+
+        '<div class="meta"><span>Equipo <b>'+millions(m.teamValue)+'</b></span>'+
+        '<span>Puntos <b>'+nf.format(m.points)+'</b></span><span>Jug. <b>'+m.txCount+'</b></span></div>';
+      board.appendChild(el);
+    });
+    requestAnimationFrame(function(){ board.querySelectorAll(".bar").forEach(function(b){ b.style.width=b.getAttribute("data-w")+"%"; }); });
+
+    renderLeague(L,M); renderPlayers(); renderYou();
+  }
+
+  function renderLeague(L,M){
+    var pos=YOU?(M.findIndex(function(m){return m.id===YOU.id})+1):"—";
+    var cards=[["Presupuesto inicial",euros(L.initialBudget),false],["Managers",L.memberCount||M.length,true],
+      ["Modo",(L.mode||"—"),true],["Tu posición",(pos!=="—"?"#"+pos:"—"),true]];
+    $("#leagueCards").innerHTML=cards.map(function(c){return '<div class="card"><div class="k">'+c[0]+'</div><div class="v'+(c[2]?" plain":"")+'">'+c[1]+'</div></div>';}).join("");
+  }
+
+  var POS=["Todos","POR","DEF","MED","DEL"], curPos="Todos";
+  function renderChips(){
+    $("#posChips").innerHTML=POS.map(function(p){return '<button class="chip'+(p===curPos?" on":"")+'" data-p="'+p+'">'+p+'</button>';}).join("");
+    $("#posChips").querySelectorAll(".chip").forEach(function(c){ c.onclick=function(){ curPos=c.getAttribute("data-p"); renderChips(); renderPlayers(); }; });
+  }
+  function renderPlayers(){
+    var q=($("#search").value||"").toLowerCase().trim();
+    var all=DATA.players||[];
+    var list=all.filter(function(p){ if(curPos!=="Todos"&&p.position!==curPos)return false;
+      if(q&&(p.name+" "+p.team).toLowerCase().indexOf(q)<0)return false; return true; })
+      .sort(function(a,b){return (b.value||0)-(a.value||0)});
+    $("#playersCount").textContent=all.length?all.length+" jugadores":"";
+    var box=$("#plist");
+    if(!all.length){ box.innerHTML='<div class="empty"><b>Sin jugadores en estos datos.</b><br>El capturador guarda solo los de tu liga. La tabla de dinero funciona igual.</div>'; return; }
+    if(!list.length){ box.innerHTML='<div class="empty">Nada coincide con tu búsqueda.</div>'; return; }
+    box.innerHTML=list.slice(0,300).map(function(p){
+      var owner=p.ownerName?'<span class="powner"><span class="b">'+esc(p.ownerName)+(YOU&&p.ownerId===YOU.id?" · tú":"")+'</span></span>':'<span class="powner"><span class="free">Libre</span></span>';
+      var hurt=(p.status&&p.status!=="ok")?'<span class="dot">●</span>':'';
+      var pc=(["POR","DEF","MED","DEL","ENT"].indexOf(p.position)>=0)?p.position:"OTH";
+      return '<div class="prow"><span class="ppos '+pc+'">'+esc(p.position)+'</span>'+
+        '<span class="pinfo"><span class="pname">'+esc(p.name)+hurt+'</span><span class="pteam">'+esc(p.team)+'</span></span>'+
+        '<span class="pright"><span class="pval">'+millions(p.value)+'</span>'+owner+'</span></div>';
+    }).join("");
+  }
+
+  function renderYou(){
+    if(!YOU){ $("#youCards").innerHTML='<div class="card full"><div class="k">Sin seleccionar</div><div class="v plain">Elige tu manager</div></div>'; return; }
+    var mine=(DATA.players||[]).filter(function(p){return p.ownerId===YOU.id});
+    var cards=[["Dinero",euros(YOU.cash),false],["Puja máxima",euros(YOU.maxBid),false],
+      ["Valor de equipo",euros(YOU.teamValue),false],["Puntos",nf.format(YOU.points),true],
+      ["Compras",euros(YOU.purchases),false],["Ventas",euros(YOU.sales),false]];
+    $("#youCards").innerHTML='<div class="card full"><div class="k">Manager</div><div class="v plain">'+esc(YOU.name)+'</div></div>'+
+      cards.map(function(c){return '<div class="card"><div class="k">'+c[0]+'</div><div class="v'+(c[2]?" plain":"")+'">'+c[1]+'</div></div>';}).join("")+
+      (mine.length?'<div class="card full"><div class="k">Tu plantilla ('+mine.length+')</div><div class="v plain" style="font-size:14px; line-height:1.7">'+mine.map(function(p){return esc(p.name)}).join(" · ")+'</div></div>':"");
+  }
+
+  // --- onboarding: ¿quién eres? ---
+  function openOnboard(){
+    var grid=$("#pickGrid");
+    grid.innerHTML=DATA.managers.slice().sort(function(a,b){return b.cash-a.cash}).map(function(m){
+      return '<button class="pick" data-id="'+m.id+'"><div class="pn">'+esc(m.name)+'</div><div class="pc">'+euros(m.cash)+'</div></button>';
+    }).join("");
+    grid.querySelectorAll(".pick").forEach(function(b){ b.onclick=function(){ store.set("youId", b.getAttribute("data-id")); $("#onb").classList.remove("show"); render(); }; });
+    $("#onb").classList.add("show");
+  }
+
+  // --- setup / import ---
+  function openSetup(){ $("#setup").classList.add("show"); }
+  function closeSetup(){ $("#setup").classList.remove("show"); }
+
+  function doImport(text){
+    var msg=$("#importMsg"); msg.className="msg";
+    var initial=parseInt(($("#initBudget").value||"0").replace(/\D/g,""),10)||40000000;
+    var mode=($("#initMode")||{}).value||"minusTeam";
+    var raw;
+    try{ raw=JSON.parse(text); }
+    catch(e){ msg.className="msg err"; msg.textContent="Eso no es JSON válido. Copia otra vez con el capturador."; return; }
+    var built;
+    try{ built = Array.isArray(raw) ? parseDump(raw, initial, mode) : reconstruct(raw, initial, mode); }
+    catch(e){ msg.className="msg err"; msg.textContent=e.message; return; }
+    if(!built.managers.length){ msg.className="msg err"; msg.textContent="No encontré managers en los datos."; return; }
+    DATA=built; saveDataset(built);
+    msg.className="msg ok"; msg.textContent="¡Liga creada! "+built.managers.length+" managers.";
+    var auto=built.managers.some(function(m){return m.isYou;});
+    if(!auto) store.del("youId");
+    setTimeout(function(){ closeSetup(); render(); if(!auto) openOnboard(); }, 500);
+  }
+
+  // bookmarklet (se ejecuta DENTRO de biwenger.as.com, donde sí hay permiso)
+  var BM1='javascript:(()=>{try{if(window.__biwStop)window.__biwStop();window.__biwCap=[];var of=window.fetch;window.__biwStop=function(){window.fetch=of};window.fetch=function(u){var url=(u&&u.url)||u;var p=of.apply(this,arguments);try{if(/\/api\/v2\//.test(String(url))){p.then(function(r){try{r.clone().json().then(function(j){window.__biwCap.push({url:String(url),body:j})}).catch(function(){})}catch(e){}})}}catch(e){}return p};alert("Capturador ACTIVADO. Ahora, con esto abierto, navega por tu liga: abre Liga, luego Actividad (o Fichajes) y baja un poco, y pasa por Mercado. Cuando hayas paseado unos segundos, ejecuta el 2o comando (copiar).")}catch(e){alert("Error activando: "+e.message)}})();';
+  var BM2='javascript:(async()=>{try{var C=window.__biwCap||[];if(window.__biwStop)window.__biwStop();if(!C.length)throw new Error("No hay nada capturado. Ejecuta primero el PASO 1, navega por Clasificacion y algun equipo, y luego esto.");var s=JSON.stringify(C);try{var blob=new Blob([s],{type:"application/json"});var a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="biwenger-todo.json";document.body.appendChild(a);a.click();setTimeout(function(){a.remove();URL.revokeObjectURL(a.href)},800)}catch(e){}alert("Descargado biwenger-todo.json con "+C.length+" respuestas. Subelo al chat.")}catch(e){alert("No se pudo: "+e.message)}})();';
+
+  // navegación / eventos
+  document.querySelectorAll(".tab").forEach(function(t){ t.onclick=function(){
+    document.querySelectorAll(".tab").forEach(function(x){x.classList.remove("on")}); t.classList.add("on");
+    var v=t.getAttribute("data-view"); document.querySelectorAll(".view").forEach(function(x){x.classList.remove("active")});
+    $("#view-"+v).classList.add("active"); window.scrollTo({top:0}); }; });
+  $("#search").addEventListener("input", renderPlayers);
+  $("#refreshBtn").onclick=function(){ loadData().then(function(d){DATA=d; render();}); };
+  $("#bannerSetup").onclick=openSetup;
+  $("#openSetup").onclick=openSetup;
+  $("#closeSetup").onclick=closeSetup;
+  $("#changeMe").onclick=function(){ store.set("youId",""); openOnboard(); };
+  $("#resetData").onclick=function(){ if(confirm("¿Borrar tu liga guardada y volver al ejemplo?")){ store.del("dataset"); store.del("youId"); location.reload(); } };
+  $("#doImport").onclick=function(){ doImport($("#importBox").value.trim()); };
+  function mkCopy(btnId,codeId,text,label){ $(btnId).onclick=function(){ (navigator.clipboard?navigator.clipboard.writeText(text):Promise.reject())
+      .then(function(){ $(btnId).textContent="¡Copiado!"; setTimeout(function(){$(btnId).textContent=label;},1500); })
+      .catch(function(){ var t=$(codeId); var r=document.createRange(); r.selectNodeContents(t); var sel=getSelection(); sel.removeAllRanges(); sel.addRange(r); }); }; }
+  mkCopy("#copyBm1","#bmCode1",BM1,"Copiar Paso 1"); mkCopy("#copyBm2","#bmCode2",BM2,"Copiar Paso 2");
+  $("#exportJson").onclick=function(){
+    if(isDemo || !DATA){ alert("Primero importa tu liga: pega los datos y pulsa «Crear mi liga»."); return; }
+    var blob=new Blob([JSON.stringify(DATA,null,2)],{type:"application/json"});
+    var a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="data.json";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(a.href); }, 1000);
+  };
+  $("#fileInput").addEventListener("change", function(e){
+    var f=e.target.files[0]; if(!f)return; var rd=new FileReader();
+    rd.onload=function(){ $("#importBox").value=rd.result; doImport(rd.result); }; rd.readAsText(f);
+  });
+
+  // arranque
+  $("#bmCode1").textContent=BM1; $("#bmCode2").textContent=BM2;
+  loadData().then(function(d){
+    DATA=d; renderChips(); render();
+    if(isDemo && !store.get("seenSetup")){ store.set("seenSetup","1"); openSetup(); }
+    else if(!isDemo && !store.get("youId") && !DATA.managers.some(function(m){return m.isYou})) openOnboard();
+  });
+
+  if("serviceWorker" in navigator && location.protocol.indexOf("http")===0){
+    window.addEventListener("load", function(){ navigator.serviceWorker.register("sw.js").catch(function(){}); });
+  }
+})();
+</script>
+</body>
+</html>

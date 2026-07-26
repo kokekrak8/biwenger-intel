@@ -1,0 +1,68 @@
+name: Actualizar Biwenger Intel
+
+# Se ejecuta cada día a las 06:10 UTC (~08:10 en España) y también a mano.
+on:
+  schedule:
+    - cron: "10 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Crear config.ini desde los secretos
+        run: |
+          cat > config.ini <<EOF
+          [biwenger]
+          email = ${{ secrets.BIW_EMAIL }}
+          password = ${{ secrets.BIW_PASSWORD }}
+          league_id = ${{ secrets.BIW_LEAGUE_ID }}
+          user_id = ${{ secrets.BIW_USER_ID }}
+          x_version = ${{ secrets.BIW_XVERSION }}
+          presupuesto_inicial = ${{ secrets.BIW_INITIAL || '40000000' }}
+          overdraft = 0
+          paginas_historico = 250
+          db = /tmp/biwenger.db
+          EOF
+
+      - name: Generar data.json
+        run: python biwenger_agent.py export -o data.json -v
+
+      - name: Preparar carpeta pública
+        run: |
+          mkdir -p public
+          cp index.html manifest.webmanifest sw.js icon-192.png icon-512.png apple-touch-icon.png public/
+          cp data.json public/
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,13 @@
+# Credenciales y datos locales — NUNCA subir
+config.ini
+*.db
+biwenger.db
+
+# Datos generados (los crea el workflow en cada deploy)
+data.json
+biwenger-todo.json
+
+# Node / sistema
+node_modules/
+.DS_Store
+Thumbs.db
