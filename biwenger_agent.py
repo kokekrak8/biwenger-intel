@@ -295,47 +295,75 @@ class BiwengerClient:
     # Respaldo local con los nombres de LaLiga (por si el endpoint público está
     # bloqueado desde el servidor). Se genera junto al script.
     PLAYERS_BUNDLE = Path(__file__).with_name("laliga-players.json")
+    BROWSER_HEADERS = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"),
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "es-ES,es;q=0.9",
+        "Origin": "https://biwenger.as.com",
+        "Referer": "https://biwenger.as.com/",
+    }
+    # Se prueban en orden. (url, usar_sesión_autenticada). El 1º es el host de la
+    # API privada (NO bloqueado); el 2º es el CDN público con cabeceras de navegador.
+    COMPETITION_SOURCES = [
+        ("https://biwenger.as.com/api/v2/competitions/la-liga/data", True),
+        ("https://cf.biwenger.com/api/v2/competitions/la-liga/data", False),
+    ]
+
+    def _competition_data(self) -> dict[str, Any] | None:
+        """Intenta traer la base de competición en vivo por varias vías."""
+        for url, use_session in self.COMPETITION_SOURCES:
+            try:
+                if use_session:
+                    resp = self.session.get(url, params={"lang": "es", "score": 2},
+                                            headers=self.BROWSER_HEADERS, timeout=self.timeout)
+                else:
+                    resp = requests.get(url, params={"lang": "es", "score": 2},
+                                        headers=self.BROWSER_HEADERS, timeout=self.timeout)
+                resp.raise_for_status()
+                data = resp.json().get("data", {})
+                if data.get("players"):
+                    log.info("Competición en vivo OK desde %s", url.split("//")[1].split("/")[0])
+                    return data
+            except Exception as e:
+                log.warning("Competición no disponible en %s (%s)",
+                            url.split("//")[1].split("/")[0], e)
+        return None
 
     def fetch_all_players(self) -> list[dict[str, Any]]:
-        """Base de datos pública de jugadores de LaLiga (nombre, equipo, valor…).
-
-        Intenta primero el endpoint público (cf.biwenger.com). Cloudflare suele
-        bloquear ese host desde IPs de datacenter (p. ej. GitHub Actions con 403),
-        así que si falla se recurre al respaldo local 'laliga-players.json'.
-        """
-        try:
-            resp = requests.get(self.COMPETITION_URL,
-                                params={"lang": "es", "score": 2},
-                                headers={"Accept": "application/json"},
-                                timeout=self.timeout)
-            resp.raise_for_status()
-            data = resp.json().get("data", {})
-            players = data.get("players", {})
+        """Base de jugadores de LaLiga con estadísticas (en vivo si se puede;
+        si no, respaldo local 'laliga-players.json')."""
+        data = self._competition_data()
+        if data:
             teams = data.get("teams", {})
+            players = data.get("players", {})
             items = players.values() if isinstance(players, dict) else players
             out = []
             for p in items:
                 tid = str(p.get("teamID") or p.get("team") or "")
                 team = (teams.get(tid) or {}).get("name") if isinstance(teams, dict) else None
+                played = int(p.get("playedHome") or 0) + int(p.get("playedAway") or 0)
+                fitness = [x for x in (p.get("fitness") or []) if isinstance(x, (int, float))]
                 out.append({
                     "id": str(p.get("id")),
                     "name": p.get("name") or "?",
                     "position": self.POSITIONS.get(p.get("position"), "?"),
                     "team": team or "?",
                     "value": int(p.get("price") or 0),
+                    "priceInc": int(p.get("priceIncrement") or 0),
                     "points": int(p.get("points") or 0),
                     "ptsLast": int(p.get("pointsLastSeason") or 0),
+                    "played": played,
+                    "fitness": fitness[:5],
                     "status": p.get("status") or "ok",
+                    "live": True,
                 })
-            log.info("Base de jugadores desde el endpoint público (%d).", len(out))
+            log.info("Base de jugadores EN VIVO (%d, con estadísticas).", len(out))
             return out
-        except Exception as e:
-            log.warning("Endpoint público de jugadores no disponible (%s); "
-                        "uso el respaldo local.", e)
 
         if self.PLAYERS_BUNDLE.exists():
             bundle = json.loads(self.PLAYERS_BUNDLE.read_text(encoding="utf-8"))
-            out = [{"id": pid, **meta} for pid, meta in bundle.items()]
+            out = [{"id": pid, "live": False, **meta} for pid, meta in bundle.items()]
             log.info("Base de jugadores desde respaldo local (%d).", len(out))
             return out
 
