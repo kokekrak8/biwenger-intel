@@ -95,6 +95,7 @@ class Manager:
     round_bonus: int = 0
     clause_increment: int = 0
     tx_count: int = 0
+    team_size: int = 0   # nº de jugadores en la plantilla
     bonus: int = 0  # ajuste manual (correcciones, sanciones, etc.)
     balance: int | None = None  # saldo EXACTO si Biwenger lo expone (solo el tuyo)
 
@@ -359,6 +360,7 @@ class BiwengerClient:
                 "name": s.get("name") or "?",
                 "team_value": int(s.get("teamValue") or 0),
                 "points": int(s.get("points") or 0),
+                "team_size": int(s.get("teamSize") or 0),
             })
         return out
 
@@ -444,7 +446,8 @@ class MoneyTracker:
         self.managers: dict[str, Manager] = {}
 
     def upsert_manager(self, manager_id: str, name: str,
-                       team_value: int = 0, points: int = 0) -> Manager:
+                       team_value: int = 0, points: int = 0,
+                       team_size: int = 0) -> Manager:
         m = self.managers.get(manager_id)
         if m is None:
             m = Manager(
@@ -457,6 +460,7 @@ class MoneyTracker:
         m.name = name or m.name
         m.team_value = team_value or m.team_value
         m.points = points or m.points
+        m.team_size = team_size or m.team_size
         return m
 
     def apply(self, tx: Transaction) -> None:
@@ -594,7 +598,8 @@ class Monitor:
     def refresh(self) -> list[Transaction]:
         for md in self.client.fetch_managers():
             self.tracker.upsert_manager(md["manager_id"], md["name"],
-                                        md["team_value"], md["points"])
+                                        md["team_value"], md["points"],
+                                        md.get("team_size", 0))
         # Tu saldo EXACTO (Biwenger solo lo expone para tu propio usuario).
         my_balance = self.client.fetch_my_balance()
         me = self.tracker.managers.get(str(self.client.my_id))
@@ -667,7 +672,7 @@ class Monitor:
                 "id": m.manager_id, "name": m.name,
                 "cash": m.cash, "maxBid": m.max_bid(self.tracker.overdraft),
                 "teamValue": m.team_value, "points": m.points,
-                "estimated": m.estimated,
+                "teamSize": m.team_size, "estimated": m.estimated,
                 "purchases": m.purchases, "sales": m.sales,
                 "roundBonus": m.round_bonus, "clauseIncrement": m.clause_increment,
                 "txCount": m.tx_count,

@@ -42,6 +42,7 @@
     width:38px; height:38px; border-radius:11px; font-size:16px; cursor:pointer; flex:none;
     display:grid; place-items:center; transition:transform .3s, border-color .2s}
   .refresh:active{transform:rotate(180deg)}
+  [hidden]{display:none!important}
   .banner{display:flex; align-items:center; gap:10px; margin-top:12px; padding:10px 12px;
     background:rgba(244,196,48,.09); border:1px solid rgba(244,196,48,.35); border-radius:12px;
     font-size:12.5px; color:var(--gold)}
@@ -467,7 +468,7 @@
         '<div class="bidwrap"><div class="bidlbl"><span>Puja máxima</span><b>'+euros(m.maxBid)+'</b></div>'+
         '<div class="track"><div class="bar" data-w="'+Math.round((m.maxBid/maxBid)*100)+'"></div></div></div>'+
         '<div class="meta"><span>Equipo <b>'+millions(m.teamValue)+'</b></span>'+
-        '<span>Puntos <b>'+nf.format(m.points)+'</b></span><span>Jug. <b>'+m.txCount+'</b></span></div>';
+        '<span>Puntos <b>'+nf.format(m.points)+'</b></span><span>Jug. <b>'+(m.teamSize!=null?m.teamSize:m.txCount)+'</b></span></div>';
       board.appendChild(el);
     });
     requestAnimationFrame(function(){ board.querySelectorAll(".bar").forEach(function(b){ b.style.width=b.getAttribute("data-w")+"%"; }); });
