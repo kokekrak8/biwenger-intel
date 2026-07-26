@@ -280,35 +280,54 @@ class BiwengerClient:
                     owners[str(pid)] = {"ownerId": oid, "ownerName": oname}
         return owners
 
-    def fetch_all_players(self) -> list[dict[str, Any]]:
-        """Base de datos pública de jugadores de LaLiga (no requiere login).
+    # Respaldo local con los nombres de LaLiga (por si el endpoint público está
+    # bloqueado desde el servidor). Se genera junto al script.
+    PLAYERS_BUNDLE = Path(__file__).with_name("laliga-players.json")
 
-        Endpoint público en otro host (cf.biwenger.com): lo pedimos SIN las
-        cabeceras de sesión/auth de la API privada para que no lo rechace.
+    def fetch_all_players(self) -> list[dict[str, Any]]:
+        """Base de datos pública de jugadores de LaLiga (nombre, equipo, valor…).
+
+        Intenta primero el endpoint público (cf.biwenger.com). Cloudflare suele
+        bloquear ese host desde IPs de datacenter (p. ej. GitHub Actions con 403),
+        así que si falla se recurre al respaldo local 'laliga-players.json'.
         """
-        resp = requests.get(self.COMPETITION_URL,
-                            params={"lang": "es", "score": 2},
-                            headers={"Accept": "application/json"},
-                            timeout=self.timeout)
-        resp.raise_for_status()
-        data = resp.json().get("data", {})
-        players = data.get("players", {})
-        teams = data.get("teams", {})
-        items = players.values() if isinstance(players, dict) else players
-        out = []
-        for p in items:
-            tid = str(p.get("teamID") or p.get("team") or "")
-            team = (teams.get(tid) or {}).get("name") if isinstance(teams, dict) else None
-            out.append({
-                "id": str(p.get("id")),
-                "name": p.get("name") or "?",
-                "position": self.POSITIONS.get(p.get("position"), "?"),
-                "team": team or "?",
-                "value": int(p.get("price") or 0),
-                "points": int(p.get("points") or 0),
-                "status": p.get("status") or "ok",
-            })
-        return out
+        try:
+            resp = requests.get(self.COMPETITION_URL,
+                                params={"lang": "es", "score": 2},
+                                headers={"Accept": "application/json"},
+                                timeout=self.timeout)
+            resp.raise_for_status()
+            data = resp.json().get("data", {})
+            players = data.get("players", {})
+            teams = data.get("teams", {})
+            items = players.values() if isinstance(players, dict) else players
+            out = []
+            for p in items:
+                tid = str(p.get("teamID") or p.get("team") or "")
+                team = (teams.get(tid) or {}).get("name") if isinstance(teams, dict) else None
+                out.append({
+                    "id": str(p.get("id")),
+                    "name": p.get("name") or "?",
+                    "position": self.POSITIONS.get(p.get("position"), "?"),
+                    "team": team or "?",
+                    "value": int(p.get("price") or 0),
+                    "points": int(p.get("points") or 0),
+                    "status": p.get("status") or "ok",
+                })
+            log.info("Base de jugadores desde el endpoint público (%d).", len(out))
+            return out
+        except Exception as e:
+            log.warning("Endpoint público de jugadores no disponible (%s); "
+                        "uso el respaldo local.", e)
+
+        if self.PLAYERS_BUNDLE.exists():
+            bundle = json.loads(self.PLAYERS_BUNDLE.read_text(encoding="utf-8"))
+            out = [{"id": pid, **meta} for pid, meta in bundle.items()]
+            log.info("Base de jugadores desde respaldo local (%d).", len(out))
+            return out
+
+        log.warning("Sin base de jugadores (ni endpoint ni respaldo).")
+        return []
 
     def fetch_transactions(self, pages: int = 1, page_size: int = 50) -> list[Transaction]:
         """Recorre el board (más reciente primero). En la 1ª ejecución sube 'pages'
