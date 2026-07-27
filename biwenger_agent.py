@@ -706,22 +706,27 @@ def _news_titles(query: str, timeout: int = 6) -> list[dict[str, Any]]:
 def _classify_title(title: str) -> tuple[int, str | None]:
     low = title.lower()
     def hit(words): return any(w in low for w in words)
+    # Sanción/expulsión: negativo inequívoco.
     if hit(("sanción", "sancion", "expulsión", "expulsion", "tarjeta roja", "suspendido")):
         return -1, "Sanción"
-    if hit(("lesión", "lesion", "lesionado", "baja", "molestias", "rotura", "operado",
-            "operación", "operacion", "descartado", "apartado", "duda", "tocado")):
-        return -1, "Lesión/duda"
-    if hit(("titular", "vuelve", "regresa", "recuperado", "alta médica", "alta medica",
-            "disponible", "convocado", "de vuelta")):
+    # "Vuelve/recuperado/titular" va ANTES que lesión: "X vuelve de su lesión" es
+    # BUENA noticia, no motivo de venta.
+    if hit(("vuelve", "regresa", "recuperado", "alta médica", "alta medica",
+            "de vuelta", "reaparece", "titular", "disponible", "convocado")):
         return 1, "Vuelve/titular"
+    if hit(("lesión", "lesion", "lesionado", "molestias", "rotura", "operado",
+            "operación", "operacion", "descartado", "apartado", "tocado")):
+        return -1, "Lesión/duda"
     if hit(("gol", "goles", "doblete", "hat-trick", "hat trick", "racha", "mvp",
             "estelar", "brilla", "brillante", "figura", "crack")):
         return 1, "En racha"
     if hit(("renueva", "renovación", "renovacion")):
         return 1, "Renueva"
-    if hit(("fichaje", "fichar", "traspaso", "cedido", "cesión", "cesion",
-            "interesa", "oferta", "salida", "adiós", "adios", "rumbo")):
-        return 0, "Rumor mercado"
+    # Solo rumores de SALIDA (no "fichaje/interesa/oferta", que suelen ser ruido
+    # o incluso buenos para el jugador).
+    if hit(("salida", "adiós", "adios", "rumbo a", "cedido", "cesión", "cesion",
+            "se marcha", "abandona")):
+        return 0, "Posible salida"
     return 0, None
 
 
@@ -1024,13 +1029,14 @@ def build_suggestions(client: "BiwengerClient", meta: dict[str, dict[str, Any]],
             reasons.append("Lesionado o sancionado"); urgency += 3
         if nsig < 0 and ntag in ("Lesión/duda", "Sanción"):
             reasons.append("Noticia: " + ntag); urgency += 2
-        if ntag == "Rumor mercado":
-            reasons.append("Suena movimiento de mercado"); urgency += 1
+        if ntag == "Posible salida":
+            reasons.append("Suena su salida del club"); urgency += 2
         if trend <= -3:
             reasons.append(f"Precio bajando ({trend}%)"); urgency += 1
         if form is not None and form <= 2 and played > 0:
             reasons.append("En baja forma"); urgency += 1
-        if reasons:
+        # Solo señales serias (urgencia >= 2): evita ruido de precio/forma sueltos.
+        if urgency >= 2:
             sell.append({
                 "id": pid, "name": info.get("name") or ("#" + pid),
                 "position": info.get("position") or "OTH", "team": info.get("team") or "?",
