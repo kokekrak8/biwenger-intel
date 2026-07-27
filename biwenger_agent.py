@@ -988,6 +988,83 @@ def build_market_intel(client: "BiwengerClient", meta: dict[str, dict[str, Any]]
     }
 
 
+def build_suggestions(client: "BiwengerClient", meta: dict[str, dict[str, Any]],
+                      my_squad: list[dict[str, Any]], market: dict[str, Any],
+                      my_cash: int | None, pos_counts: dict[str, int]) -> dict[str, Any]:
+    """Sugerencias personalizadas: qué VENDER de tu plantilla (por noticias/estado/
+    forma/precio) y qué FICHAR del mercado libre (jugadores del sistema, no los que
+    vende otro manager)."""
+    # --- VENDER: noticias de tus jugadores + señales de alarma ---
+    squad_pids = [str(p.get("id")) for p in my_squad
+                  if isinstance(p, dict) and p.get("id")]
+    targets = {pid: {"name": meta.get(pid, {}).get("name", ""),
+                     "team": meta.get(pid, {}).get("team", "")} for pid in squad_pids}
+    squad_news = fetch_players_news(targets, HISTORY_DIR / "news.json")
+
+    sell = []
+    for p in my_squad:
+        pid = str(p.get("id") if isinstance(p, dict) else p)
+        info = meta.get(pid, {})
+        status = info.get("status") or "ok"
+        value = int(info.get("value") or 0)
+        price_inc = int(info.get("priceInc") or 0)
+        played = int(info.get("played") or 0)
+        fitness = [x for x in (info.get("fitness") or []) if isinstance(x, (int, float))]
+        form = round(sum(fitness) / len(fitness), 1) if fitness else None
+        clause = None
+        owner = p.get("owner") if isinstance(p, dict) else None
+        if isinstance(owner, dict):
+            clause = owner.get("clause")
+        pn = squad_news.get(pid) or {}
+        nsig, ntag = pn.get("signal") or 0, pn.get("tag")
+        trend = round(price_inc / value * 100, 1) if value else 0.0
+
+        reasons, urgency = [], 0
+        if status != "ok":
+            reasons.append("Lesionado o sancionado"); urgency += 3
+        if nsig < 0 and ntag in ("Lesión/duda", "Sanción"):
+            reasons.append("Noticia: " + ntag); urgency += 2
+        if ntag == "Rumor mercado":
+            reasons.append("Suena movimiento de mercado"); urgency += 1
+        if trend <= -3:
+            reasons.append(f"Precio bajando ({trend}%)"); urgency += 1
+        if form is not None and form <= 2 and played > 0:
+            reasons.append("En baja forma"); urgency += 1
+        if reasons:
+            sell.append({
+                "id": pid, "name": info.get("name") or ("#" + pid),
+                "position": info.get("position") or "OTH", "team": info.get("team") or "?",
+                "status": status, "value": value, "clause": clause,
+                "trendPct": trend, "form": form,
+                "news": {"signal": nsig, "tag": ntag, "headline": pn.get("headline")},
+                "reasons": reasons, "urgency": urgency,
+            })
+    sell.sort(key=lambda x: x["urgency"], reverse=True)
+
+    # --- FICHAR: del mercado, solo LIBRES (sistema), asequibles y sin alarma ---
+    thin = min(pos_counts, key=lambda k: pos_counts[k]) if pos_counts else None
+    buy = []
+    for it in market.get("items", []):
+        if it.get("seller"):            # lo vende un manager → no es libre
+            continue
+        if not it.get("canAfford") or it.get("label") == "Riesgo":
+            continue
+        b = dict(it)
+        fit = []
+        pos = it.get("position")
+        if pos and pos_counts.get(pos, 0) <= 3:
+            fit.append("Refuerza tu " + pos)
+        if pos and pos == thin:
+            fit.append("Tu posición más escasa")
+        b["fitReasons"] = fit
+        buy.append(b)
+    buy.sort(key=lambda x: (len(x.get("fitReasons", [])), x.get("score", 0)), reverse=True)
+    buy = buy[:8]
+
+    return {"sell": sell, "buy": buy, "thinPosition": thin,
+            "squadSize": len(squad_pids)}
+
+
 # ---------------------------------------------------------------------------
 # Monitor
 # ---------------------------------------------------------------------------
@@ -1107,6 +1184,7 @@ class Monitor:
 
         # Jugadores CON DUEÑO: la plantilla de cada manager (players id + cláusula).
         players = []
+        squads: dict[str, list[dict[str, Any]]] = {}
         if include_players and meta:
             try:
                 squads = self.client.fetch_squads(name_by_id.keys())
@@ -1136,6 +1214,20 @@ class Monitor:
         market = build_market_intel(self.client, meta, managers,
                                     str(self.client.my_id), my_cash)
 
+        # SUGERENCIAS: qué vender de tu plantilla y qué fichar del mercado libre.
+        suggestions = {}
+        my_squad = squads.get(str(self.client.my_id), [])
+        pos_counts: dict[str, int] = {}
+        for p in my_squad:
+            pos = meta.get(str(p.get("id") if isinstance(p, dict) else p), {}).get("position")
+            if pos:
+                pos_counts[pos] = pos_counts.get(pos, 0) + 1
+        try:
+            suggestions = build_suggestions(self.client, meta, my_squad, market,
+                                            my_cash, pos_counts)
+        except Exception as e:
+            log.warning("No se pudieron generar sugerencias: %s", e)
+
         data = {
             "generatedAt": datetime.now(timezone.utc).isoformat(),
             "league": {
@@ -1150,11 +1242,14 @@ class Monitor:
             "managers": managers,
             "players": players,
             "market": market,
+            "suggestions": suggestions,
         }
         Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2),
                               encoding="utf-8")
-        log.info("Exportado %s (%d managers, %d jugadores, %d en mercado).",
-                 path, len(managers), len(players), len((market or {}).get("items", [])))
+        log.info("Exportado %s (%d managers, %d jugadores, %d en mercado, "
+                 "%d a vender / %d a fichar).",
+                 path, len(managers), len(players), len((market or {}).get("items", [])),
+                 len((suggestions or {}).get("sell", [])), len((suggestions or {}).get("buy", [])))
         return data
 
     def run_forever(self, interval: int) -> None:
