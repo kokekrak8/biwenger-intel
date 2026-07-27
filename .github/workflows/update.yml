@@ -1,9 +1,12 @@
 name: Actualizar Biwenger Intel
 
-# Se ejecuta cada día a las 06:10 UTC (~08:10 en España) y también a mano.
+# Se ejecuta a diario y también a mano. Ponemos DOS horarios en minutos poco
+# saturados (el cron de GitHub descarta ejecuciones a las horas "redondas"):
+# ~08:27 España como principal y ~13:27 como respaldo por si el primero se cae.
 on:
   schedule:
-    - cron: "10 6 * * *"
+    - cron: "27 6 * * *"
+    - cron: "27 11 * * *"
   workflow_dispatch:
 
 permissions:
