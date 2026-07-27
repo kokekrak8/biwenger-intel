@@ -756,30 +756,45 @@ def classify_player_news(name: str, titles: list[dict[str, Any]], days: int = 14
     return {"signal": signal, "tag": tag, "count": len(rel), "headline": head}
 
 
+def _titles_from_cache(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convierte titulares cacheados (ts epoch) al formato que espera el clasificador."""
+    out = []
+    for t in rows:
+        ts = t.get("ts") or 0
+        out.append({"title": t.get("title", ""), "link": t.get("link", ""),
+                    "source": t.get("source", ""),
+                    "when": datetime.fromtimestamp(ts, tz=timezone.utc) if ts else None})
+    return out
+
+
 def fetch_players_news(name_by_pid: dict[str, dict[str, str]], cache_path: Path) -> dict[str, Any]:
-    """Noticias por jugador (solo los del mercado). Cachea por día y reutiliza la
-    última conocida si la búsqueda de hoy falla, para no quedarnos sin nada."""
+    """Noticias por jugador. Cachea los TITULARES EN CRUDO por día (la búsqueda web
+    es lo caro) y clasifica en cada ejecución, para que mejorar el clasificador surta
+    efecto al instante sin re-buscar. Si la búsqueda de hoy falla, reutiliza lo último."""
     cache = _load_json(cache_path, {})
     today = datetime.now(timezone.utc).strftime("%Y%m%d")
-    out, ok = {}, 0
+    out, fetched = {}, 0
     for pid, info in name_by_pid.items():
-        prev = cache.get(pid)
-        if prev and prev.get("day") == today:
-            out[pid] = prev
-            continue
-        try:
-            name = info["name"]
-            q = f'"{name}" {info.get("team", "")} fútbol'
-            res = classify_player_news(name, _news_titles(q))
-            res["day"] = today
-            out[pid] = cache[pid] = res
-            ok += 1
-        except Exception as e:  # pragma: no cover
-            log.warning("Noticias no disponibles para %s: %s", info.get("name"), e)
-            if prev:
-                out[pid] = prev
+        name = info.get("name") or ""
+        entry = cache.get(pid)
+        rows = None
+        if entry and entry.get("day") == today and "titles" in entry:
+            rows = entry["titles"]
+        else:
+            try:
+                raw = _news_titles(f'"{name}" {info.get("team", "")} fútbol')
+                rows = [{"title": t["title"], "link": t["link"], "source": t["source"],
+                         "ts": int(t["when"].timestamp()) if t["when"] else 0} for t in raw]
+                cache[pid] = {"day": today, "titles": rows}
+                fetched += 1
+            except Exception as e:  # pragma: no cover
+                log.warning("Noticias no disponibles para %s: %s", name, e)
+                if entry and "titles" in entry:
+                    rows = entry["titles"]        # reutiliza aunque sea de otro día
+        if rows is not None:
+            out[pid] = classify_player_news(name, _titles_from_cache(rows))
     _save_json(cache_path, cache)
-    log.info("Noticias: %d jugadores consultados hoy.", ok)
+    log.info("Noticias: %d jugadores buscados hoy.", fetched)
     return out
 
 
