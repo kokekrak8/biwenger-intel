@@ -93,6 +93,7 @@
   .meta{display:flex; gap:14px; margin-top:11px; padding-top:10px; border-top:1px solid var(--line);
     font-size:11.5px; color:var(--muted)}
   .meta span b{color:var(--text); font-family:var(--mono); font-weight:500; font-variant-numeric:tabular-nums}
+  .meta .anchor{color:var(--signal); font-weight:600}
 
   .cards{display:grid; grid-template-columns:1fr 1fr; gap:10px}
   .card{background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:14px}
@@ -401,6 +402,9 @@
   function ago(iso){ var d=new Date(iso), s=(Date.now()-d.getTime())/1000;
     if(isNaN(s))return ""; if(s<3600)return "hace "+Math.max(1,Math.round(s/60))+" min";
     if(s<86400)return "hace "+Math.round(s/3600)+" h"; return "hace "+Math.round(s/86400)+" días"; }
+  function shortDate(iso){ var d=new Date(iso); if(isNaN(d.getTime()))return String(iso||"");
+    var mm=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+    return d.getDate()+" "+mm[d.getMonth()]; }
   function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];}); }
   function mapPos(p){ return ({1:"POR",2:"DEF",3:"MED",4:"DEL",5:"ENT"})[p]||"OTH"; }
 
@@ -533,7 +537,8 @@
         '<div class="bidwrap"><div class="bidlbl"><span>Puja máxima</span><b>'+euros(m.maxBid)+'</b></div>'+
         '<div class="track"><div class="bar" data-w="'+Math.round((m.maxBid/maxBid)*100)+'"></div></div></div>'+
         '<div class="meta"><span>Equipo <b>'+millions(m.teamValue)+'</b></span>'+
-        '<span>Puntos <b>'+nf.format(m.points)+'</b></span><span>Jug. <b>'+(m.teamSize!=null?m.teamSize:m.txCount)+'</b></span></div>';
+        '<span>Puntos <b>'+nf.format(m.points)+'</b></span><span>Jug. <b>'+(m.teamSize!=null?m.teamSize:m.txCount)+'</b></span>'+
+        (m.anchor?'<span class="anchor" title="'+esc(m.anchor.note||"")+'">📌 real · '+shortDate(m.anchor.date)+'</span>':"")+'</div>';
       board.appendChild(el);
     });
     requestAnimationFrame(function(){ board.querySelectorAll(".bar").forEach(function(b){ b.style.width=b.getAttribute("data-w")+"%"; }); });

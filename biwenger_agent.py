@@ -653,6 +653,9 @@ class TelegramNotifier:
 # Inteligencia de mercado
 # ---------------------------------------------------------------------------
 HISTORY_DIR = Path("history")
+# Saldos REALES de rivales vistos a mano (p. ej. capturas del grupo). Anclan el
+# saldo de ese manager a un valor exacto en una fecha, en vez de estimarlo.
+KNOWN_BALANCES_FILE = Path(__file__).with_name("known-balances.json")
 DEFAULT_OVERBID = 1.08          # factor de puja por defecto hasta tener datos
 MIN_AUCTION_SAMPLES = 4         # muestras mínimas para fiarnos del factor aprendido
 
@@ -1181,14 +1184,26 @@ class Monitor:
         self.client.login()
         self.refresh()  # actualiza managers + dinero
 
+        # Saldos REALES conocidos (capturas del grupo): anclan el saldo exacto de
+        # un rival a la fecha en que se vio, en lugar de estimarlo.
+        known_bal = _load_json(KNOWN_BALANCES_FILE, {})
+        for mid, kb in known_bal.items():
+            m = self.tracker.managers.get(str(mid))
+            bal = kb.get("balance") if isinstance(kb, dict) else None
+            if m is not None and bal is not None:
+                m.balance = int(bal)
+
         name_by_id = {m.manager_id: m.name for m in self.tracker.table()}
         managers = []
         for m in self.tracker.table():
+            anchor = known_bal.get(m.manager_id) if not (m.manager_id == str(self.client.my_id)) else None
             managers.append({
                 "id": m.manager_id, "name": m.name,
                 "cash": m.cash, "maxBid": m.max_bid(self.tracker.overdraft),
                 "teamValue": m.team_value, "points": m.points,
                 "teamSize": m.team_size, "estimated": m.estimated,
+                "anchor": ({"date": anchor.get("date"), "note": anchor.get("note")}
+                           if isinstance(anchor, dict) else None),
                 "purchases": m.purchases, "sales": m.sales,
                 "roundBonus": m.round_bonus, "clauseIncrement": m.clause_increment,
                 "txCount": m.tx_count,
