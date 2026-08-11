@@ -762,9 +762,12 @@ def reconstruct_balances(manager_ids: list[str], squads: dict[str, list[dict[str
         # plantilla que tenía al empezar: la actual menos lo comprado, más lo vendido
         initial_ids = (current_ids - bought_ids) | (sold_ids - bought_ids)
         initial_value = sum(int(baseline.get(pid, 0)) for pid in initial_ids)
-        est[mid] = (initial_budget - initial_value
-                    + sum(a for _, a in sells) - sum(a for _, a in buys)
-                    + bonus - clause)
+        sum_buys = sum(a for _, a in buys)
+        sum_sells = sum(a for _, a in sells)
+        est[mid] = initial_budget - initial_value + sum_sells - sum_buys + bonus - clause
+        log.info("  recon %s: 40M - ini %s + ventas %s - compras %s - claus %s = %s "
+                 "(nIni=%d nBuy=%d nSell=%d)", mid, fmt(initial_value), fmt(sum_sells),
+                 fmt(sum_buys), fmt(clause), fmt(est[mid]), len(initial_ids), len(buys), len(sells))
     return est
 
 
