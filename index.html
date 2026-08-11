@@ -78,6 +78,8 @@
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
   .tag{font-size:10px; font-weight:600; color:var(--signal); border:1px solid rgba(63,224,162,.4);
     padding:1px 6px; border-radius:999px; letter-spacing:.5px; flex:none}
+  .note .neg{color:var(--danger)}
+  .cash.neg{color:var(--danger)!important}
   .cash{margin-left:auto; font-family:var(--mono); font-weight:700; font-size:19px; color:var(--gold);
     font-variant-numeric:tabular-nums; flex:none}
   .bidwrap{margin-top:11px; position:relative; z-index:1}
@@ -265,7 +267,7 @@
     <section class="view active" id="view-money">
       <div class="eyebrow"><span>Dinero de la liga</span><span id="moneyCount"></span></div>
       <div class="board" id="board"></div>
-      <div class="note" style="margin-top:12px"><b>~</b> = saldo estimado. Biwenger no muestra el saldo de los rivales; se estima como <b>40M − Valor de Equipo</b> y se le aplican los movimientos del <b>Tablón</b> (cláusulas y abonos de jornada). El tuyo es el real. Muy fiel a principio de temporada; se desvía algo según suben o bajan los precios de los jugadores.</div>
+      <div class="note" style="margin-top:12px"><b>~</b> = saldo estimado. Biwenger oculta el saldo de los rivales, así que se <b>reconstruye desde el Tablón</b>: presupuesto inicial − plantilla inicial + ventas − compras + premios − cláusulas (lo mismo que calcula Biwenger). El tuyo es exacto. Un saldo <b class="neg">en negativo</b> es real: ese manager va sobreextendido y <b>tendrá que vender antes de la jornada</b> para cuadrar (por eso su puja máxima es baja).</div>
     </section>
 
     <section class="view" id="view-market">
@@ -533,7 +535,7 @@
       var el=document.createElement("div"); el.className="row"+(mine?" you":"");
       el.innerHTML='<div class="top"><span class="pos">'+(i+1)+'</span>'+
         '<span class="name">'+esc(m.name)+'</span>'+(mine?'<span class="tag">TÚ</span>':'')+
-        '<span class="cash">'+(m.estimated?"~":"")+euros(m.cash)+'</span></div>'+
+        '<span class="cash'+(m.cash<0?" neg":"")+'">'+(m.estimated?"~":"")+euros(m.cash)+'</span></div>'+
         '<div class="bidwrap"><div class="bidlbl"><span>Puja máxima</span><b>'+euros(m.maxBid)+'</b></div>'+
         '<div class="track"><div class="bar" data-w="'+Math.round((m.maxBid/maxBid)*100)+'"></div></div></div>'+
         '<div class="meta"><span>Equipo <b>'+millions(m.teamValue)+'</b></span>'+
