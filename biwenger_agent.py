@@ -487,6 +487,27 @@ class BiwengerClient:
                  len(transfers), len(rounds), len(clauses), rng)
         return {"transfers": transfers, "rounds": rounds, "clauses": clauses}
 
+    def fetch_price_history(self, pid: str) -> list[list[int]]:
+        """Histórico de precios diario de un jugador: [[YYMMDD, precio], …]."""
+        url = f"https://biwenger.as.com/api/v2/players/la-liga/{pid}"
+        try:
+            r = self.session.get(url, params={"fields": "prices", "lang": "es"},
+                                 headers=self.BROWSER_HEADERS, timeout=self.timeout)
+            r.raise_for_status()
+            pr = r.json().get("data", {}).get("prices")
+            return pr if isinstance(pr, list) else []
+        except Exception as e:  # pragma: no cover
+            log.warning("Sin histórico de precios para %s: %s", pid, e)
+            return []
+
+    def price_on(self, prices: list[list[int]], yymmdd: int) -> int | None:
+        """Precio en una fecha (o el más cercano anterior) desde el histórico."""
+        best = None
+        for d, p in prices:
+            if d <= yymmdd and (best is None or d > best[0]):
+                best = (d, p)
+        return int(best[1]) if best else (int(prices[0][1]) if prices else None)
+
     def diagnose_prices(self, sample_pids: list[str]) -> None:
         """DIAGNÓSTICO temporal: fecha de inicio de temporada y si hay histórico de
         precios por jugador (para valorar la plantilla inicial con precisión)."""
@@ -1357,11 +1378,28 @@ class Monitor:
                 log.info("Validación %s: estimado %s vs real %s (dif %s)",
                          m.name, fmt(est[m.manager_id]), fmt(m.balance), fmt(diff))
 
-        # DIAGNÓSTICO temporal: fecha de inicio + histórico de precios por jugador.
+        # DIAGNÓSTICO: recalcular MI saldo con el precio EXACTO de arranque de cada
+        # jugador inicial (varias fechas candidatas) para ver cuál cuadra con mi real.
         try:
-            my_pids = [str(p.get("id")) for p in squads.get(my_id, [])
-                       if isinstance(p, dict) and p.get("id")]
-            self.client.diagnose_prices(my_pids)
+            if me is not None and me.balance is not None:
+                tr = board["transfers"]
+                my_buys = [(t["playerId"], t["amount"]) for t in tr if t.get("buyerId") == my_id and t.get("playerId")]
+                my_sells = [(t["playerId"], t["amount"]) for t in tr if t.get("sellerId") == my_id and t.get("playerId")]
+                bought = {p for p, _ in my_buys}
+                sold = {p for p, _ in my_sells}
+                cur = {str(p.get("id")) for p in squads.get(my_id, []) if isinstance(p, dict) and p.get("id")}
+                init_ids = (cur - bought) | (sold - bought)
+                my_clause = sum(c["amount"] for c in board["clauses"] if c.get("userId") == my_id)
+                sB = sum(a for _, a in my_buys); sS = sum(a for _, a in my_sells)
+                hist = {pid: self.client.fetch_price_history(pid) for pid in init_ids}
+                for cand in (260725, 260726, 260727):
+                    iv = sum((self.client.price_on(hist.get(pid) or [], cand) or int(baseline.get(pid, 0)))
+                             for pid in init_ids)
+                    est_p = self.tracker.default_initial - iv + sS - sB - my_clause
+                    log.info("DIAG inicio %s: ini=%s est=%s vs real %s (dif %s)",
+                             cand, fmt(iv), fmt(est_p), fmt(me.balance), fmt(est_p - me.balance))
+                iv_b = sum(int(baseline.get(pid, 0)) for pid in init_ids)
+                log.info("DIAG bundle: ini=%s (para comparar)", fmt(iv_b))
         except Exception as e:
             log.warning("DIAG falló: %s", e)
 
