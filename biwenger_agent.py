@@ -433,6 +433,7 @@ class BiwengerClient:
         transfers: list[dict[str, Any]] = []
         rounds: list[dict[str, Any]] = []
         clauses: list[dict[str, Any]] = []
+        dmin = dmax = None
         try:
             for p in range(pages):
                 resp = self.session.get(
@@ -448,6 +449,10 @@ class BiwengerClient:
                     break
                 for mv in items:
                     t = mv.get("type")
+                    d = mv.get("date")
+                    if isinstance(d, int):
+                        dmin = d if dmin is None else min(dmin, d)
+                        dmax = d if dmax is None else max(dmax, d)
                     if t in ("transfer", "market", "adminTransfer"):
                         for c in (mv.get("content") or []):
                             pl = c.get("player")
@@ -474,9 +479,42 @@ class BiwengerClient:
                                 clauses.append({"userId": str(uid), "amount": amount})
         except Exception as e:  # pragma: no cover
             log.warning("No se pudo leer el tablón completo: %s", e)
-        log.info("Tablón: %d transferencias, %d premios, %d cláusulas.",
-                 len(transfers), len(rounds), len(clauses))
+        rng = ""
+        if dmin and dmax:
+            rng = (" [" + datetime.fromtimestamp(dmin, tz=timezone.utc).strftime("%Y-%m-%d")
+                   + " → " + datetime.fromtimestamp(dmax, tz=timezone.utc).strftime("%Y-%m-%d") + "]")
+        log.info("Tablón: %d transferencias, %d premios, %d cláusulas%s.",
+                 len(transfers), len(rounds), len(clauses), rng)
         return {"transfers": transfers, "rounds": rounds, "clauses": clauses}
+
+    def diagnose_prices(self, sample_pids: list[str]) -> None:
+        """DIAGNÓSTICO temporal: fecha de inicio de temporada y si hay histórico de
+        precios por jugador (para valorar la plantilla inicial con precisión)."""
+        data = self._competition_data() or {}
+        season = data.get("season")
+        log.info("DIAG season: %s", json.dumps(season)[:300] if season else "n/a")
+        for pid in sample_pids[:2]:
+            for base, use_sess in (("https://biwenger.as.com", True),
+                                   ("https://cf.biwenger.com", False)):
+                url = f"{base}/api/v2/players/la-liga/{pid}"
+                try:
+                    kw = dict(params={"fields": "*,prices,fitness", "lang": "es"},
+                              headers=self.BROWSER_HEADERS, timeout=self.timeout)
+                    r = self.session.get(url, **kw) if use_sess else requests.get(url, **kw)
+                    host = base.split("//")[1]
+                    if r.status_code != 200:
+                        log.info("DIAG %s @ %s -> HTTP %s", pid, host, r.status_code)
+                        continue
+                    d = r.json().get("data", {})
+                    prices = d.get("prices")
+                    log.info("DIAG %s @ %s -> OK claves=%s prices=%s",
+                             pid, host, ",".join(list(d.keys())[:10]),
+                             (len(prices) if isinstance(prices, list) else type(prices).__name__))
+                    if isinstance(prices, list) and prices:
+                        log.info("DIAG %s prices[0..2]=%s ...[-1]=%s", pid,
+                                 json.dumps(prices[:3]), json.dumps(prices[-1]))
+                except Exception as e:
+                    log.warning("DIAG %s @ %s FAIL: %s", pid, base.split("//")[1], e)
 
     # -- parsers (adáptalos si cambian los nombres de campo) ---------------
     @staticmethod
@@ -1318,6 +1356,14 @@ class Monitor:
                 diff = est[m.manager_id] - m.balance
                 log.info("Validación %s: estimado %s vs real %s (dif %s)",
                          m.name, fmt(est[m.manager_id]), fmt(m.balance), fmt(diff))
+
+        # DIAGNÓSTICO temporal: fecha de inicio + histórico de precios por jugador.
+        try:
+            my_pids = [str(p.get("id")) for p in squads.get(my_id, [])
+                       if isinstance(p, dict) and p.get("id")]
+            self.client.diagnose_prices(my_pids)
+        except Exception as e:
+            log.warning("DIAG falló: %s", e)
 
         def cash_of(m: "Manager") -> int:
             return m.balance if m.balance is not None else est.get(m.manager_id, m.cash)
