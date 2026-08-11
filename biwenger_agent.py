@@ -1381,7 +1381,8 @@ class Monitor:
         # DIAGNÓSTICO: recalcular MI saldo con el precio EXACTO de arranque de cada
         # jugador inicial (varias fechas candidatas) para ver cuál cuadra con mi real.
         try:
-            if me is not None and me.balance is not None:
+            me_mgr = self.tracker.managers.get(my_id)
+            if me_mgr is not None and me_mgr.balance is not None:
                 tr = board["transfers"]
                 my_buys = [(t["playerId"], t["amount"]) for t in tr if t.get("buyerId") == my_id and t.get("playerId")]
                 my_sells = [(t["playerId"], t["amount"]) for t in tr if t.get("sellerId") == my_id and t.get("playerId")]
@@ -1397,7 +1398,7 @@ class Monitor:
                              for pid in init_ids)
                     est_p = self.tracker.default_initial - iv + sS - sB - my_clause
                     log.info("DIAG inicio %s: ini=%s est=%s vs real %s (dif %s)",
-                             cand, fmt(iv), fmt(est_p), fmt(me.balance), fmt(est_p - me.balance))
+                             cand, fmt(iv), fmt(est_p), fmt(me_mgr.balance), fmt(est_p - me_mgr.balance))
                 iv_b = sum(int(baseline.get(pid, 0)) for pid in init_ids)
                 log.info("DIAG bundle: ini=%s (para comparar)", fmt(iv_b))
         except Exception as e:
