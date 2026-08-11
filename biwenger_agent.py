@@ -508,35 +508,6 @@ class BiwengerClient:
                 best = (d, p)
         return int(best[1]) if best else (int(prices[0][1]) if prices else None)
 
-    def diagnose_prices(self, sample_pids: list[str]) -> None:
-        """DIAGNÓSTICO temporal: fecha de inicio de temporada y si hay histórico de
-        precios por jugador (para valorar la plantilla inicial con precisión)."""
-        data = self._competition_data() or {}
-        season = data.get("season")
-        log.info("DIAG season: %s", json.dumps(season)[:300] if season else "n/a")
-        for pid in sample_pids[:2]:
-            for base, use_sess in (("https://biwenger.as.com", True),
-                                   ("https://cf.biwenger.com", False)):
-                url = f"{base}/api/v2/players/la-liga/{pid}"
-                try:
-                    kw = dict(params={"fields": "*,prices,fitness", "lang": "es"},
-                              headers=self.BROWSER_HEADERS, timeout=self.timeout)
-                    r = self.session.get(url, **kw) if use_sess else requests.get(url, **kw)
-                    host = base.split("//")[1]
-                    if r.status_code != 200:
-                        log.info("DIAG %s @ %s -> HTTP %s", pid, host, r.status_code)
-                        continue
-                    d = r.json().get("data", {})
-                    prices = d.get("prices")
-                    log.info("DIAG %s @ %s -> OK claves=%s prices=%s",
-                             pid, host, ",".join(list(d.keys())[:10]),
-                             (len(prices) if isinstance(prices, list) else type(prices).__name__))
-                    if isinstance(prices, list) and prices:
-                        log.info("DIAG %s prices[0..2]=%s ...[-1]=%s", pid,
-                                 json.dumps(prices[:3]), json.dumps(prices[-1]))
-                except Exception as e:
-                    log.warning("DIAG %s @ %s FAIL: %s", pid, base.split("//")[1], e)
-
     # -- parsers (adáptalos si cambian los nombres de campo) ---------------
     @staticmethod
     def _parse_managers(payload: Any) -> list[dict[str, Any]]:
@@ -766,8 +737,28 @@ HISTORY_DIR = Path("history")
 # Saldos REALES de rivales vistos a mano (p. ej. capturas del grupo). Anclan el
 # saldo de ese manager a un valor exacto en una fecha, en vez de estimarlo.
 KNOWN_BALANCES_FILE = Path(__file__).with_name("known-balances.json")
+# Día de arranque de la liga (YYMMDD). Validado: con el precio de cada jugador ese
+# día, la reconstrucción del saldo da EXACTO (dif 0 € contra mi saldo real).
+LEAGUE_START_YYMMDD = 260725    # 2026-07-25
 DEFAULT_OVERBID = 1.08          # factor de puja por defecto hasta tener datos
 MIN_AUCTION_SAMPLES = 4         # muestras mínimas para fiarnos del factor aprendido
+
+
+def fetch_start_prices(client: "BiwengerClient", pids: Iterable[str], yymmdd: int,
+                       cache_path: Path, fallback: dict[str, int]) -> dict[str, int]:
+    """Precio de cada jugador el día de arranque de la liga, para valorar la
+    plantilla inicial con exactitud. Es un dato HISTÓRICO (inmutable), así que se
+    cachea permanentemente y solo se pide para jugadores nuevos."""
+    cache: dict[str, Any] = _load_json(cache_path, {})
+    missing = [p for p in set(pids) if p not in cache]
+    for pid in missing:
+        price = client.price_on(client.fetch_price_history(pid), yymmdd)
+        cache[pid] = price if price is not None else int(fallback.get(pid, 0))
+    if missing:
+        _save_json(cache_path, cache)
+        log.info("Precios de arranque: %d nuevos cacheados (%d en total).",
+                 len(missing), len(cache))
+    return {pid: int(cache.get(pid) or fallback.get(pid, 0)) for pid in set(pids)}
 
 
 def _load_json(path: Path, default: Any) -> Any:
@@ -1369,7 +1360,25 @@ class Monitor:
         # Tablón COMPLETO → reconstrucción de saldos (compras/ventas/premios/cláusulas).
         board = self.client.fetch_full_board()
         ids = [m.manager_id for m in self.tracker.table()]
-        est = reconstruct_balances(ids, squads, board, baseline, self.tracker.default_initial)
+
+        # PRECIOS DE ARRANQUE (exactos, del histórico) para valorar cada plantilla
+        # inicial. Universo: jugadores en plantillas actuales + vendidos alguna vez.
+        needed = set()
+        for mid in ids:
+            for p in squads.get(mid, []):
+                if isinstance(p, dict) and p.get("id"):
+                    needed.add(str(p["id"]))
+        for t in board["transfers"]:
+            if t.get("sellerId") and t.get("playerId"):
+                needed.add(t["playerId"])
+        try:
+            start_prices = fetch_start_prices(self.client, needed, LEAGUE_START_YYMMDD,
+                                              HISTORY_DIR / "start-prices.json", baseline)
+        except Exception as e:
+            log.warning("No se pudieron obtener precios de arranque (%s); uso bundle.", e)
+            start_prices = baseline
+
+        est = reconstruct_balances(ids, squads, board, start_prices, self.tracker.default_initial)
 
         # Validación en el log: estimado vs real donde lo sabemos (tú, anclas).
         for m in self.tracker.table():
@@ -1377,32 +1386,6 @@ class Monitor:
                 diff = est[m.manager_id] - m.balance
                 log.info("Validación %s: estimado %s vs real %s (dif %s)",
                          m.name, fmt(est[m.manager_id]), fmt(m.balance), fmt(diff))
-
-        # DIAGNÓSTICO: recalcular MI saldo con el precio EXACTO de arranque de cada
-        # jugador inicial (varias fechas candidatas) para ver cuál cuadra con mi real.
-        try:
-            me_mgr = self.tracker.managers.get(my_id)
-            if me_mgr is not None and me_mgr.balance is not None:
-                tr = board["transfers"]
-                my_buys = [(t["playerId"], t["amount"]) for t in tr if t.get("buyerId") == my_id and t.get("playerId")]
-                my_sells = [(t["playerId"], t["amount"]) for t in tr if t.get("sellerId") == my_id and t.get("playerId")]
-                bought = {p for p, _ in my_buys}
-                sold = {p for p, _ in my_sells}
-                cur = {str(p.get("id")) for p in squads.get(my_id, []) if isinstance(p, dict) and p.get("id")}
-                init_ids = (cur - bought) | (sold - bought)
-                my_clause = sum(c["amount"] for c in board["clauses"] if c.get("userId") == my_id)
-                sB = sum(a for _, a in my_buys); sS = sum(a for _, a in my_sells)
-                hist = {pid: self.client.fetch_price_history(pid) for pid in init_ids}
-                for cand in (260725, 260726, 260727):
-                    iv = sum((self.client.price_on(hist.get(pid) or [], cand) or int(baseline.get(pid, 0)))
-                             for pid in init_ids)
-                    est_p = self.tracker.default_initial - iv + sS - sB - my_clause
-                    log.info("DIAG inicio %s: ini=%s est=%s vs real %s (dif %s)",
-                             cand, fmt(iv), fmt(est_p), fmt(me_mgr.balance), fmt(est_p - me_mgr.balance))
-                iv_b = sum(int(baseline.get(pid, 0)) for pid in init_ids)
-                log.info("DIAG bundle: ini=%s (para comparar)", fmt(iv_b))
-        except Exception as e:
-            log.warning("DIAG falló: %s", e)
 
         def cash_of(m: "Manager") -> int:
             return m.balance if m.balance is not None else est.get(m.manager_id, m.cash)
