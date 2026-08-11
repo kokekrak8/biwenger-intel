@@ -427,6 +427,57 @@ class BiwengerClient:
             log.warning("No se pudieron leer las ventas del tablón: %s", e)
         return out
 
+    def fetch_full_board(self, pages: int = 16, page_size: int = 50) -> dict[str, Any]:
+        """Tablón COMPLETO parseado para reconstruir el saldo: transferencias con
+        comprador Y vendedor, premios de jornada y subidas de cláusula."""
+        transfers: list[dict[str, Any]] = []
+        rounds: list[dict[str, Any]] = []
+        clauses: list[dict[str, Any]] = []
+        try:
+            for p in range(pages):
+                resp = self.session.get(
+                    self.BOARD_URL.format(lid=self.league_id),
+                    params={"type": "transfer,market,adminTransfer,roundFinished,clauseIncrement",
+                            "offset": p * page_size, "limit": page_size},
+                    timeout=self.timeout)
+                resp.raise_for_status()
+                data = resp.json()
+                data = data.get("data", data) if isinstance(data, dict) else data
+                items = data if isinstance(data, list) else (data.get("items") or [])
+                if not items:
+                    break
+                for mv in items:
+                    t = mv.get("type")
+                    if t in ("transfer", "market", "adminTransfer"):
+                        for c in (mv.get("content") or []):
+                            pl = c.get("player")
+                            pid = (pl or {}).get("id") if isinstance(pl, dict) else pl
+                            buyer = (c.get("to") or {}).get("id") if isinstance(c.get("to"), dict) else None
+                            seller = (c.get("from") or {}).get("id") if isinstance(c.get("from"), dict) else None
+                            transfers.append({
+                                "playerId": str(pid) if pid is not None else None,
+                                "amount": int(c.get("amount") or 0),
+                                "buyerId": str(buyer) if buyer else None,
+                                "sellerId": str(seller) if seller else None})
+                    elif t == "roundFinished":
+                        content = mv.get("content") or {}
+                        for r in (content.get("results") or []):
+                            uid = (r.get("user") or {}).get("id") if isinstance(r.get("user"), dict) else r.get("user")
+                            bonus = int(r.get("bonus") or 0)
+                            if uid and bonus:
+                                rounds.append({"userId": str(uid), "bonus": bonus})
+                    elif t == "clauseIncrement":
+                        for c in (mv.get("content") or []):
+                            uid = (c.get("user") or {}).get("id") if isinstance(c.get("user"), dict) else c.get("user")
+                            amount = int(c.get("amount") or 0)
+                            if uid and amount:
+                                clauses.append({"userId": str(uid), "amount": amount})
+        except Exception as e:  # pragma: no cover
+            log.warning("No se pudo leer el tablón completo: %s", e)
+        log.info("Tablón: %d transferencias, %d premios, %d cláusulas.",
+                 len(transfers), len(rounds), len(clauses))
+        return {"transfers": transfers, "rounds": rounds, "clauses": clauses}
+
     # -- parsers (adáptalos si cambian los nombres de campo) ---------------
     @staticmethod
     def _parse_managers(payload: Any) -> list[dict[str, Any]]:
@@ -678,6 +729,43 @@ def _median(xs: list[float]) -> float:
     s = sorted(xs)
     n = len(s)
     return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+def reconstruct_balances(manager_ids: list[str], squads: dict[str, list[dict[str, Any]]],
+                         board: dict[str, Any], baseline: dict[str, int],
+                         initial_budget: int) -> dict[str, int]:
+    """Reconstruye el saldo de cada manager a partir del tablón:
+
+        saldo = presupuesto_inicial − valor_plantilla_inicial
+                + ventas − compras + premios − cláusulas
+
+    'valor_plantilla_inicial' se estima a precios de referencia (bundle ~inicio de
+    liga) de la plantilla que tenía al empezar, deducida de la plantilla actual y de
+    las compras/ventas del tablón. Es el mismo cálculo que hace Biwenger por dentro,
+    así que es exacto salvo por operaciones anteriores a lo que alcanza el tablón.
+    """
+    transfers = board.get("transfers", [])
+    rounds = board.get("rounds", [])
+    clauses = board.get("clauses", [])
+    est: dict[str, int] = {}
+    for mid in manager_ids:
+        buys = [(t["playerId"], t["amount"]) for t in transfers
+                if t.get("buyerId") == mid and t.get("playerId")]
+        sells = [(t["playerId"], t["amount"]) for t in transfers
+                 if t.get("sellerId") == mid and t.get("playerId")]
+        bonus = sum(r["bonus"] for r in rounds if r.get("userId") == mid)
+        clause = sum(c["amount"] for c in clauses if c.get("userId") == mid)
+        bought_ids = {pid for pid, _ in buys}
+        sold_ids = {pid for pid, _ in sells}
+        current_ids = {str(p.get("id")) for p in squads.get(mid, [])
+                       if isinstance(p, dict) and p.get("id")}
+        # plantilla que tenía al empezar: la actual menos lo comprado, más lo vendido
+        initial_ids = (current_ids - bought_ids) | (sold_ids - bought_ids)
+        initial_value = sum(int(baseline.get(pid, 0)) for pid in initial_ids)
+        est[mid] = (initial_budget - initial_value
+                    + sum(a for _, a in sells) - sum(a for _, a in buys)
+                    + bonus - clause)
+    return est
 
 
 # --- Noticias: Google News RSS + palabras clave ----------------------------
@@ -1194,12 +1282,53 @@ class Monitor:
                 m.balance = int(bal)
 
         name_by_id = {m.manager_id: m.name for m in self.tracker.table()}
+        my_id = str(self.client.my_id)
+
+        # Base de LaLiga con stats en vivo (nombre, posición, valor, forma…).
+        meta: dict[str, dict[str, Any]] = {}
+        try:
+            meta = {p["id"]: p for p in self.client.fetch_all_players()}
+        except Exception as e:
+            log.warning("No se pudo cargar la base de jugadores: %s", e)
+
+        # Precios de REFERENCIA (bundle ~inicio de liga) para valorar la plantilla
+        # inicial en la reconstrucción de saldos.
+        baseline: dict[str, int] = {}
+        try:
+            bundle = _load_json(BiwengerClient.PLAYERS_BUNDLE, {})
+            baseline = {pid: int((v or {}).get("value") or 0) for pid, v in bundle.items()}
+        except Exception as e:
+            log.warning("No se pudo cargar el baseline de precios: %s", e)
+
+        # Plantillas de todos (para reconstrucción, jugadores y sugerencias).
+        squads: dict[str, list[dict[str, Any]]] = {}
+        try:
+            squads = self.client.fetch_squads(name_by_id.keys())
+        except Exception as e:
+            log.warning("No se pudieron leer las plantillas: %s", e)
+
+        # Tablón COMPLETO → reconstrucción de saldos (compras/ventas/premios/cláusulas).
+        board = self.client.fetch_full_board()
+        ids = [m.manager_id for m in self.tracker.table()]
+        est = reconstruct_balances(ids, squads, board, baseline, self.tracker.default_initial)
+
+        # Validación en el log: estimado vs real donde lo sabemos (tú, anclas).
+        for m in self.tracker.table():
+            if m.balance is not None and m.manager_id in est:
+                diff = est[m.manager_id] - m.balance
+                log.info("Validación %s: estimado %s vs real %s (dif %s)",
+                         m.name, fmt(est[m.manager_id]), fmt(m.balance), fmt(diff))
+
+        def cash_of(m: "Manager") -> int:
+            return m.balance if m.balance is not None else est.get(m.manager_id, m.cash)
+
         managers = []
         for m in self.tracker.table():
-            anchor = known_bal.get(m.manager_id) if not (m.manager_id == str(self.client.my_id)) else None
+            c = cash_of(m)
+            anchor = known_bal.get(m.manager_id) if m.manager_id != my_id else None
             managers.append({
                 "id": m.manager_id, "name": m.name,
-                "cash": m.cash, "maxBid": m.max_bid(self.tracker.overdraft),
+                "cash": c, "maxBid": c + m.team_value // 4 + self.tracker.overdraft,
                 "teamValue": m.team_value, "points": m.points,
                 "teamSize": m.team_size, "estimated": m.estimated,
                 "anchor": ({"date": anchor.get("date"), "note": anchor.get("note")}
@@ -1207,48 +1336,34 @@ class Monitor:
                 "purchases": m.purchases, "sales": m.sales,
                 "roundBonus": m.round_bonus, "clauseIncrement": m.clause_increment,
                 "txCount": m.tx_count,
-                "isYou": m.manager_id == str(self.client.my_id),
+                "isYou": m.manager_id == my_id,
             })
 
-        # Base pública de LaLiga (nombre, posición, equipo, valor…). La usan tanto
-        # los jugadores con dueño como la inteligencia de mercado.
-        meta: dict[str, dict[str, Any]] = {}
-        try:
-            meta = {p["id"]: p for p in self.client.fetch_all_players()}
-        except Exception as e:
-            log.warning("No se pudo cargar la base de jugadores: %s", e)
-
-        # Jugadores CON DUEÑO: la plantilla de cada manager (players id + cláusula).
+        # Jugadores CON DUEÑO (nombre/valor de meta cruzado con las plantillas).
         players = []
-        squads: dict[str, list[dict[str, Any]]] = {}
         if include_players and meta:
-            try:
-                squads = self.client.fetch_squads(name_by_id.keys())
-                for owner_id, squad in squads.items():
-                    for p in squad:
-                        pid = str(p.get("id") if isinstance(p, dict) else p)
-                        info = meta.get(pid, {})
-                        owner = p.get("owner") if isinstance(p, dict) else None
-                        clause = (owner or {}).get("clause") if isinstance(owner, dict) else None
-                        players.append({
-                            "id": pid,
-                            "name": info.get("name") or ("#" + pid),
-                            "position": info.get("position") or "OTH",
-                            "team": info.get("team") or "?",
-                            "value": int(info.get("value") or clause or 0),
-                            "points": int(info.get("points") or 0),
-                            "status": info.get("status") or "ok",
-                            "ownerId": owner_id,
-                            "ownerName": name_by_id.get(owner_id),
-                        })
-            except Exception as e:  # los jugadores son opcionales
-                log.warning("No se pudieron cargar los jugadores: %s", e)
+            for owner_id, squad in squads.items():
+                for p in squad:
+                    pid = str(p.get("id") if isinstance(p, dict) else p)
+                    info = meta.get(pid, {})
+                    owner = p.get("owner") if isinstance(p, dict) else None
+                    clause = (owner or {}).get("clause") if isinstance(owner, dict) else None
+                    players.append({
+                        "id": pid,
+                        "name": info.get("name") or ("#" + pid),
+                        "position": info.get("position") or "OTH",
+                        "team": info.get("team") or "?",
+                        "value": int(info.get("value") or clause or 0),
+                        "points": int(info.get("points") or 0),
+                        "status": info.get("status") or "ok",
+                        "ownerId": owner_id,
+                        "ownerName": name_by_id.get(owner_id),
+                    })
 
         # MERCADO: oportunidades del día + puja sugerida (aprende con el tiempo).
-        me = self.tracker.managers.get(str(self.client.my_id))
-        my_cash = me.cash if me is not None else None
-        market = build_market_intel(self.client, meta, managers,
-                                    str(self.client.my_id), my_cash)
+        me = self.tracker.managers.get(my_id)
+        my_cash = cash_of(me) if me is not None else None
+        market = build_market_intel(self.client, meta, managers, my_id, my_cash)
 
         # SUGERENCIAS: qué vender de tu plantilla y qué fichar del mercado libre.
         suggestions = {}
