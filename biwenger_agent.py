@@ -882,14 +882,23 @@ def classify_player_news(name: str, titles: list[dict[str, Any]], days: int = 14
             continue
         rel.append(t)
     rel.sort(key=lambda t: t["when"] or _EPOCH, reverse=True)
-    signal, tag = 0, None
-    for t in rel[:6]:
-        s, tg = _classify_title(t["title"])
-        if tg and tag is None:
-            tag = tg
-        signal += s
+    scored = [(*_classify_title(t["title"]), t) for t in rel[:8]]  # (sig, tag, title)
+    signal = sum(s for s, _, _ in scored)
     signal = 1 if signal > 0 else (-1 if signal < 0 else 0)
-    top = rel[0] if rel else None
+
+    # Titular COHERENTE con la señal: el más reciente que la justifica (mismo signo).
+    # Así el titular mostrado nunca contradice la recomendación.
+    chosen = None
+    if signal != 0:
+        chosen = next(((tg, t) for s, tg, t in scored
+                       if s != 0 and (s > 0) == (signal > 0)), None)
+    if chosen is None:
+        chosen = next(((tg, t) for s, tg, t in scored if tg), None)
+    if chosen is None and scored:
+        chosen = (scored[0][1], scored[0][2])
+
+    tag = chosen[0] if chosen else None
+    top = chosen[1] if chosen else None
     head = None
     if top:
         head = {"title": top["title"], "url": top["link"], "source": top["source"],
@@ -1052,7 +1061,15 @@ def build_market_intel(client: "BiwengerClient", meta: dict[str, dict[str, Any]]
         raw = max(raw, list_price + max(1, round(list_price * 0.02)))
         suggested = min(raw, my_cash) if my_cash else raw
         can_afford = (my_cash is None) or (my_cash >= list_price)
-        contenders = [r["name"] for r in rivals if (r.get("maxBid") or 0) >= suggested]
+        # QUIÉN puede pujar: rivales que pueden pagar al menos el precio de salida,
+        # ordenados por su puja máxima real (los de arriba son la amenaza seria).
+        bidders = sorted(
+            ({"name": r["name"], "maxBid": int(r.get("maxBid") or 0)}
+             for r in rivals if (r.get("maxBid") or 0) >= list_price),
+            key=lambda x: x["maxBid"], reverse=True)
+        # de esos, cuántos pueden SUPERAR tu puja sugerida
+        threats = sum(1 for b in bidders if b["maxBid"] >= suggested)
+        contenders = [b["name"] for b in bidders if b["maxBid"] >= suggested]
 
         # valor deportivo y forma
         eff_points = points if points else pts_last
@@ -1124,8 +1141,9 @@ def build_market_intel(client: "BiwengerClient", meta: dict[str, dict[str, Any]]
             "pointsPerM": ppm,
             "suggestedBid": suggested,
             "canAfford": can_afford,
-            "contenders": len(contenders),
+            "contenders": threats,
             "contenderNames": contenders[:6],
+            "bidders": bidders[:8],
             "news": {"signal": nsig, "tag": ntag, "headline": pnews.get("headline")},
             "label": label,
             "score": score,
@@ -1179,6 +1197,12 @@ def build_suggestions(client: "BiwengerClient", meta: dict[str, dict[str, Any]],
         pn = squad_news.get(pid) or {}
         nsig, ntag = pn.get("signal") or 0, pn.get("tag")
         trend = round(price_inc / value * 100, 1) if value else 0.0
+
+        # COHERENCIA: si la noticia es claramente POSITIVA (vuelve, en racha,
+        # renueva…), NO recomendar vender aunque el estado diga lesión (suele estar
+        # a punto de volver). Evita el "vende X" con titular que dice lo contrario.
+        if nsig > 0:
+            continue
 
         reasons, urgency = [], 0
         if status != "ok":
